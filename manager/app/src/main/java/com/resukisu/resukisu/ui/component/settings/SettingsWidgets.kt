@@ -1,6 +1,7 @@
 package com.resukisu.resukisu.ui.component.settings
 
 import android.R
+import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
@@ -53,8 +54,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Expand
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -89,6 +88,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -556,9 +556,9 @@ private const val SharedStiffness = Spring.StiffnessMediumLow
  * A container that groups items with a spliced, continuous look (similar to M3 Expressive).
  *
  * Features:
- * - **Dynamic Shapes**: Top and bottom corners morph smoothly between rounded (outer) and sharp (inner) based on visibility.
- * - **Blinds Animation**: Items expand/collapse vertically without scaling, simulating a shutter/blinds effect.
- * - **Stacking Order**: Items slide over each other cleanly during exit animations.
+ * - **Dynamic Shapes**: Smoothly morphs on Android 13+; uses static fallback on Android 12 and below to prevent RenderNode crashes.
+ * - **Blinds Animation**: Items expand/collapse vertically without scaling.
+ * - **Stacking Order**: Exiting items slide over remaining items to mask any shape transitions.
  */
 @Composable
 fun SplicedColumnGroup(
@@ -566,10 +566,7 @@ fun SplicedColumnGroup(
     title: String = "",
     content: SplicedGroupScope.() -> Unit
 ) {
-    val scope = remember { SplicedGroupScope() }
-    scope.items.clear()
-    scope.content()
-
+    val scope = SplicedGroupScope().apply(content)
     val allItems = scope.items
 
     if (allItems.isEmpty()) return
@@ -588,73 +585,92 @@ fun SplicedColumnGroup(
             val firstVisibleIndex = allItems.indexOfFirst { it.visible }
             val lastVisibleIndex = allItems.indexOfLast { it.visible }
 
-            // Use a shared stiffness constant for all animations (layout, fade, and shape morphing).
-            // This ensures the physics feel connected and synchronized, preventing "ghosting" artifacts
-            // where content fades out before the layout collapses.
+            val sharedStiffness = Spring.StiffnessMediumLow
 
             allItems.forEachIndexed { index, itemData ->
-                // Using a stable key is mandatory for correct AnimatedVisibility behavior in lists.
                 key(itemData.key) {
-                    // Z-Index Trick:
-                    // We invert the visual stacking order so that items lower in the list render ON TOP of items above them.
-                    // This ensures that when an item shrinks upwards (shutter effect), the item below it slides 'over'
-                    // the gap rather than underneath, creating a solid, card-stacking feel.
-                    val zIndex = allItems.size - index.toFloat()
+                    // Shutter Masking Z-Index:
+                    // Exiting items MUST render on top to physically cover the gaps and morphing corners.
+                    val zIndex = if (itemData.visible) 0f else 1f
 
                     AnimatedVisibility(
                         visible = itemData.visible,
                         modifier = Modifier.zIndex(zIndex),
                         enter = expandVertically(
-                            animationSpec = spring(stiffness = SharedStiffness),
-                            expandFrom = Alignment.Top // Unroll downwards like a blind
+                            animationSpec = spring(stiffness = sharedStiffness),
+                            expandFrom = Alignment.Top
                         ) + fadeIn(
-                            animationSpec = spring(stiffness = SharedStiffness)
+                            animationSpec = spring(stiffness = sharedStiffness)
                         ),
                         exit = shrinkVertically(
-                            animationSpec = spring(stiffness = SharedStiffness),
-                            shrinkTowards = Alignment.Top // Roll up upwards
+                            animationSpec = spring(stiffness = sharedStiffness),
+                            shrinkTowards = Alignment.Top
                         ) + fadeOut(
-                            animationSpec = spring(stiffness = SharedStiffness)
+                            animationSpec = spring(stiffness = sharedStiffness)
                         )
                     ) {
-                        val isFirst = index == firstVisibleIndex
-                        val isLast = index == lastVisibleIndex
+                        // Stable Edge Retention: Keep outer corners rounded even during exit.
+                        val isFirst =
+                            index == firstVisibleIndex || (index == 0 && !itemData.visible)
+                        val isLast =
+                            index == lastVisibleIndex || (index == allItems.lastIndex && !itemData.visible)
 
-                        // Determine target corner radii based on current visibility position.
-                        // Outer boundaries get full CornerRadius; inner connections get smaller ConnectionRadius.
                         val targetTopRadius = if (isFirst) CornerRadius else ConnectionRadius
                         val targetBottomRadius = if (isLast) CornerRadius else ConnectionRadius
 
-                        // Animate shape changes to match the enter/exit physics.
-                        val animatedTopRadius by animateDpAsState(
-                            targetValue = targetTopRadius,
-                            animationSpec = spring(stiffness = SharedStiffness),
-                            label = "TopCornerRadius"
-                        )
-                        val animatedBottomRadius by animateDpAsState(
-                            targetValue = targetBottomRadius,
-                            animationSpec = spring(stiffness = SharedStiffness),
-                            label = "BottomCornerRadius"
-                        )
+                        // Conditionally apply animateDpAsState only for Android 13 (TIRAMISU) and above.
+                        val isAtLeastTiramisu =
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+
+                        val currentTopRadius = if (isAtLeastTiramisu) {
+                            animateDpAsState(
+                                targetValue = targetTopRadius,
+                                animationSpec = spring(stiffness = sharedStiffness),
+                                label = "TopCornerRadius"
+                            ).value
+                        } else {
+                            targetTopRadius
+                        }
+
+                        val currentBottomRadius = if (isAtLeastTiramisu) {
+                            animateDpAsState(
+                                targetValue = targetBottomRadius,
+                                animationSpec = spring(stiffness = sharedStiffness),
+                                label = "BottomCornerRadius"
+                            ).value
+                        } else {
+                            targetBottomRadius
+                        }
 
                         val shape = RoundedCornerShape(
-                            topStart = animatedTopRadius,
-                            topEnd = animatedTopRadius,
-                            bottomStart = animatedBottomRadius,
-                            bottomEnd = animatedBottomRadius
+                            topStart = currentTopRadius,
+                            topEnd = currentTopRadius,
+                            bottomStart = currentBottomRadius,
+                            bottomEnd = currentBottomRadius
                         )
 
-                        // Layout Stability Fix:
-                        // Instead of placing spacing/padding at the bottom, we apply it to the TOP for all items except the first.
-                        // Since our animation shrinks towards the TOP, bottom-padding would be clipped first, causing
-                        // the next item to "jump" instantly. By anchoring spacing to the top, it persists until the
-                        // very end of the shrink animation.
-                        val topPadding = if (index == 0) 0.dp else 2.dp
+                        // Padding is safe to animate on all Android versions.
+                        val targetTopPadding = if (isFirst) 0.dp else 2.dp
+                        val currentTopPadding = if (isAtLeastTiramisu) {
+                            animateDpAsState(
+                                targetValue = targetTopPadding,
+                                animationSpec = spring(stiffness = sharedStiffness),
+                                label = "TopPadding"
+                            ).value
+                        } else {
+                            // On older Androids, animating layout bounds with clip can also be risky,
+                            // but usually padding is fine. If it still glitches, use static padding.
+                            targetTopPadding
+                        }
 
                         Column(
                             modifier = Modifier
-                                .padding(top = topPadding)
-                                .clip(shape)
+                                .padding(top = currentTopPadding)
+                                // Using graphicsLayer is more performant for shapes during animation
+                                .graphicsLayer {
+                                    this.shape = shape
+                                    this.clip = true
+                                }
                                 .background(
                                     MaterialTheme.colorScheme.surfaceBright.copy(
                                         alpha = CardConfig.cardAlpha
