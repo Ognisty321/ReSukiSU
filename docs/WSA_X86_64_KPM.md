@@ -1,14 +1,14 @@
-# WSA x86_64 KPM Runtime
+# WSA x86_64 ReSukiSU KPM Runtime
 
 Author and maintainer: Ognisty321
 
-This document describes the ReSukiSU side of the WSA x86_64 KPM runtime.
+This document describes the ReSukiSU KPM runtime used by the WSA x86_64 kernel port.
 
 ## Purpose
 
-The upstream KPM ecosystem is mostly ARM64. WSA runs an x86_64 kernel, so ARM64 `kpimg` and ARM64 `.kpm` binaries are not usable directly.
+The WSA kernel port already brings ReSukiSU and SUSFS to the x86_64 WSA kernel base. KPM needed a separate x86_64 runtime because the upstream KPM ecosystem is mostly ARM64.
 
-This branch adds an x86_64 direct KPM loader and compatibility layer inside ReSukiSU for the WSA kernel tree.
+WSA runs an x86_64 kernel, so ARM64 `kpimg` and ARM64 `.kpm` binaries are not usable directly. This branch adds an x86_64 direct KPM loader and compatibility layer inside ReSukiSU for the WSA kernel tree.
 
 ## Main Files
 
