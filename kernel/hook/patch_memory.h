@@ -6,6 +6,7 @@
 #ifndef __KSU_PATCH_MEMORY_H
 #define __KSU_PATCH_MEMORY_H
 
+#include <linux/cache.h>
 #include <linux/types.h>
 #include "linux/version.h"
 

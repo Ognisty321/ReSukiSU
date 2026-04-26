@@ -38,6 +38,12 @@ ifdef CONFIG_KPM
 kernelsu-objs += kpm/kpm.o
 kernelsu-objs += kpm/compact.o
 kernelsu-objs += kpm/super_access.o
+ifdef CONFIG_X86_64
+kernelsu-objs += kpm/kpm_loader_x86_64.o
+ifndef CONFIG_KSU_TRACEPOINT_HOOK
+kernelsu-objs += hook/x86_64/patch_memory.o
+endif
+endif
 endif
 
 ifdef CONFIG_ARM64

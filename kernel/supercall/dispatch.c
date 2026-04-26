@@ -1225,13 +1225,13 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .cmd = KSU_IOCTL_HOOK_TYPE, 
         .name = "GET_HOOK_TYPE", 
         .handler = do_get_hook_type, 
-        .perm_check = manager_or_root 
+        .perm_check = manager_root_or_allowed_su 
     },
     { 
         .cmd = KSU_IOCTL_ENABLE_KPM, 
         .name = "GET_ENABLE_KPM", 
         .handler = do_enable_kpm, 
-        .perm_check = manager_or_root 
+        .perm_check = manager_root_or_allowed_su 
     },
     { 
         .cmd = KSU_IOCTL_DYNAMIC_MANAGER,
@@ -1249,14 +1249,14 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .cmd = KSU_IOCTL_GET_KERNEL_PATCH_IMPLEMENT, 
         .name = "GET_KERNEL_PATCH_IMPLEMENT", 
         .handler = do_get_kernel_patch_implement, 
-        .perm_check = manager_or_root 
+        .perm_check = manager_root_or_allowed_su 
     },
 #ifdef CONFIG_KPM
     { 
         .cmd = KSU_IOCTL_KPM, 
         .name = "KPM_OPERATION", 
         .handler = do_kpm, 
-        .perm_check = manager_or_root 
+        .perm_check = manager_root_or_allowed_su 
     },
 #endif
     { 

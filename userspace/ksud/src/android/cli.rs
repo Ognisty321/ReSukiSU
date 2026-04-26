@@ -139,7 +139,7 @@ enum Commands {
     },
 
     /// KPM module manager
-    #[cfg(all(target_arch = "aarch64", target_os = "android"))]
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "android"))]
     Kpm {
         #[command(subcommand)]
         command: kpm_cmd::Kpm,
@@ -531,7 +531,7 @@ enum UmountOp {
     List,
 }
 
-#[cfg(all(target_arch = "aarch64", target_os = "android"))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "android"))]
 mod kpm_cmd {
     use std::path::PathBuf;
 
@@ -888,7 +888,7 @@ pub fn run() -> Result<()> {
                 Ok(())
             }
         },
-        #[cfg(all(target_arch = "aarch64", target_os = "android"))]
+        #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "android"))]
         Commands::Kpm { command } => {
             use kpm_cmd::Kpm;
 

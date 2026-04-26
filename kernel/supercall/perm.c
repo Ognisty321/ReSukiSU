@@ -3,6 +3,7 @@
 #include "supercall/internal.h"
 #include "manager/manager_identity.h"
 #include "policy/allowlist.h"
+#include "selinux/selinux.h"
 
 #include "compat/kernel_compat.h"
 
@@ -18,7 +19,14 @@ bool only_root(void)
 
 bool manager_or_root(void)
 {
-    return ksu_get_uid_t(current_uid()) == 0 || is_manager();
+    return ksu_get_uid_t(current_uid()) == 0 || is_manager() || is_ksu_domain();
+}
+
+bool manager_root_or_allowed_su(void)
+{
+    uid_t uid = ksu_get_uid_t(current_uid());
+
+    return uid == 0 || uid == 2000 || is_manager() || is_ksu_domain() || ksu_is_allow_uid_for_current(uid);
 }
 
 bool always_allow(void)

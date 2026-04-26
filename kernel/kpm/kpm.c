@@ -37,6 +37,7 @@
 #endif
 #include "kpm.h"
 #include "compact.h"
+#include "kpm_loader_x86_64.h"
 #include "compat/kernel_compat.h"
 #include "uapi/supercall.h"
 
@@ -55,65 +56,69 @@
 
 noinline NO_OPTIMIZE void sukisu_kpm_load_module_path(const char *path, const char *args, void *ptr, int *result)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_load_module_path). "
-            "path=%s args=%s ptr=%p\n",
-            path, args, ptr);
+    int rc = sukisu_kpm_loader_load_module_path(path, args, ptr);
 
     __asm__ volatile("nop");
+    if (result)
+        *result = rc;
 }
 EXPORT_SYMBOL(sukisu_kpm_load_module_path);
 
 noinline NO_OPTIMIZE void sukisu_kpm_unload_module(const char *name, void *ptr, int *result)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_unload_module). "
-            "name=%s ptr=%p\n",
-            name, ptr);
+    int rc = sukisu_kpm_loader_unload_module(name, ptr);
 
     __asm__ volatile("nop");
+    if (result)
+        *result = rc;
 }
 EXPORT_SYMBOL(sukisu_kpm_unload_module);
 
 noinline NO_OPTIMIZE void sukisu_kpm_num(int *result)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_num).\n");
+    int rc = sukisu_kpm_loader_num();
 
     __asm__ volatile("nop");
+    if (result)
+        *result = rc;
 }
 EXPORT_SYMBOL(sukisu_kpm_num);
 
 noinline NO_OPTIMIZE void sukisu_kpm_info(const char *name, char *buf, int bufferSize, int *size)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_info). "
-            "name=%s buffer=%p\n",
-            name, buf);
+    int rc = sukisu_kpm_loader_info(name, buf, bufferSize);
 
     __asm__ volatile("nop");
+    if (size)
+        *size = rc < 0 ? rc : rc + 1;
 }
 EXPORT_SYMBOL(sukisu_kpm_info);
 
 noinline NO_OPTIMIZE void sukisu_kpm_list(void *out, int bufferSize, int *result)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_list). "
-            "buffer=%p size=%d\n",
-            out, bufferSize);
+    int rc = sukisu_kpm_loader_list(out, bufferSize);
+
+    if (result)
+        *result = rc;
 }
 EXPORT_SYMBOL(sukisu_kpm_list);
 
 noinline NO_OPTIMIZE void sukisu_kpm_control(const char *name, const char *args, long arg_len, int *result)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_control). "
-            "name=%p args=%p arg_len=%ld\n",
-            name, args, arg_len);
+    int rc = sukisu_kpm_loader_control(name, arg_len <= 0 ? "" : args);
 
     __asm__ volatile("nop");
+    if (result)
+        *result = rc;
 }
 EXPORT_SYMBOL(sukisu_kpm_control);
 
 noinline NO_OPTIMIZE void sukisu_kpm_version(char *buf, int bufferSize)
 {
-    pr_info("kpm: Stub function called (sukisu_kpm_version). "
-            "buffer=%p\n",
-            buf);
+    int rc = sukisu_kpm_loader_version(buf, bufferSize);
+
+    if (rc < 0 && buf && bufferSize > 0)
+        buf[0] = '\0';
 }
 EXPORT_SYMBOL(sukisu_kpm_version);
 
@@ -124,6 +129,7 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
     if (control_code == KSU_KPM_LOAD) {
         char kernel_load_path[256] = { 0 };
         char kernel_args_buffer[256] = { 0 };
+        long path_len;
 
         if (arg1 == 0) {
             res = -EINVAL;
@@ -134,19 +140,33 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
             goto invalid_arg;
         }
 
-        strncpy_from_user((char *)&kernel_load_path, (const char *)arg1, sizeof(kernel_load_path));
+        path_len = strncpy_from_user((char *)&kernel_load_path, (const char *)arg1, sizeof(kernel_load_path));
+        if (path_len <= 0) {
+            res = path_len < 0 ? path_len : -EINVAL;
+            goto exit;
+        }
+        kernel_load_path[sizeof(kernel_load_path) - 1] = '\0';
 
         if (arg2 != 0) {
+            long args_len;
+
             if (!ksu_access_ok(arg2, sizeof(kernel_args_buffer))) {
                 goto invalid_arg;
             }
 
-            strncpy_from_user((char *)&kernel_args_buffer, (const char *)arg2, sizeof(kernel_args_buffer));
+            args_len = strncpy_from_user((char *)&kernel_args_buffer, (const char *)arg2,
+                                         sizeof(kernel_args_buffer));
+            if (args_len < 0) {
+                res = args_len;
+                goto exit;
+            }
+            kernel_args_buffer[sizeof(kernel_args_buffer) - 1] = '\0';
         }
 
         sukisu_kpm_load_module_path((const char *)&kernel_load_path, (const char *)&kernel_args_buffer, NULL, &res);
     } else if (control_code == KSU_KPM_UNLOAD) {
         char kernel_name_buffer[256] = { 0 };
+        long name_len;
 
         if (arg1 == 0) {
             res = -EINVAL;
@@ -157,7 +177,12 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
             goto invalid_arg;
         }
 
-        strncpy_from_user((char *)&kernel_name_buffer, (const char *)arg1, sizeof(kernel_name_buffer));
+        name_len = strncpy_from_user((char *)&kernel_name_buffer, (const char *)arg1, sizeof(kernel_name_buffer));
+        if (name_len <= 0) {
+            res = name_len < 0 ? name_len : -EINVAL;
+            goto exit;
+        }
+        kernel_name_buffer[sizeof(kernel_name_buffer) - 1] = '\0';
 
         sukisu_kpm_unload_module((const char *)&kernel_name_buffer, NULL, &res);
     } else if (control_code == KSU_KPM_NUM) {
@@ -165,7 +190,8 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
     } else if (control_code == KSU_KPM_INFO) {
         char kernel_name_buffer[256] = { 0 };
         char buf[256] = { 0 };
-        int size;
+        int size = 0;
+        long name_len;
 
         if (arg1 == 0 || arg2 == 0) {
             res = -EINVAL;
@@ -176,9 +202,20 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
             goto invalid_arg;
         }
 
-        strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg1, sizeof(kernel_name_buffer));
+        name_len = strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg1,
+                                     sizeof(kernel_name_buffer));
+        if (name_len <= 0) {
+            res = name_len < 0 ? name_len : -EINVAL;
+            goto exit;
+        }
+        kernel_name_buffer[sizeof(kernel_name_buffer) - 1] = '\0';
 
         sukisu_kpm_info((const char *)&kernel_name_buffer, (char *)&buf, sizeof(buf), &size);
+
+        if (size < 0) {
+            res = size;
+            goto exit;
+        }
 
         if (!ksu_access_ok(arg2, size)) {
             goto invalid_arg;
@@ -195,18 +232,22 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
             goto exit;
         }
 
-        if (!ksu_access_ok(arg2, len)) {
+        if (!ksu_access_ok(arg1, len)) {
             goto invalid_arg;
         }
 
         sukisu_kpm_list((char *)&buf, sizeof(buf), &res);
 
-        if (res > len) {
+        if (res < 0) {
+            goto exit;
+        }
+
+        if (res >= len) {
             res = -ENOBUFS;
             goto exit;
         }
 
-        if (copy_to_user(arg1, &buf, len) != 0)
+        if (copy_to_user(arg1, &buf, res + 1) != 0)
             pr_info("kpm: Copy to user failed.");
 
     } else if (control_code == KSU_KPM_CONTROL) {
@@ -238,6 +279,16 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
 
         unsigned int outlen = (unsigned int)arg2;
         int len = strlen(buffer);
+
+        if (arg1 == 0 || outlen == 0) {
+            res = -EINVAL;
+            goto exit;
+        }
+
+        if (!ksu_access_ok(arg1, outlen)) {
+            goto invalid_arg;
+        }
+
         if (len >= outlen)
             len = outlen - 1;
 
@@ -270,12 +321,7 @@ int do_kpm(void __user *arg)
         return -EFAULT;
     }
 
-    if (!ksu_access_ok(cmd.control_code, sizeof(int))) {
-        pr_err("kpm: invalid control_code pointer %px\n", (void *)cmd.control_code);
-        return -EFAULT;
-    }
-
-    if (!ksu_access_ok(cmd.result_code, sizeof(int))) {
+    if (!cmd.result_code || !ksu_access_ok(cmd.result_code, sizeof(int))) {
         pr_err("kpm: invalid result_code pointer %px\n", (void *)cmd.result_code);
         return -EFAULT;
     }

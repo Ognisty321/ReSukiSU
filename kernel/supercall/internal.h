@@ -9,6 +9,7 @@
 bool only_manager(void);
 bool only_root(void);
 bool manager_or_root(void);
+bool manager_root_or_allowed_su(void);
 bool always_allow(void);
 bool allowed_for_su(void);
 
