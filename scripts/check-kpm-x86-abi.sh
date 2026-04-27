@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
 
 header="kernel/kpm/kpm_loader_x86_64.h"
 loader_name="$(sed -n 's/^#define SUKISU_KPM_LOADER_NAME "\(.*\)"/\1/p' "$header")"
