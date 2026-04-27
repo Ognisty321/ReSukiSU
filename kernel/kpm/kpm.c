@@ -183,8 +183,7 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
                 goto invalid_arg;
             }
 
-            args_len = strncpy_from_user((char *)&kernel_args_buffer, (const char *)arg2,
-                                         sizeof(kernel_args_buffer));
+            args_len = strncpy_from_user((char *)&kernel_args_buffer, (const char *)arg2, sizeof(kernel_args_buffer));
             if (args_len < 0) {
                 res = args_len;
                 goto exit;
@@ -231,8 +230,8 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
             goto invalid_arg;
         }
 
-        name_len = strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg1,
-                                     sizeof(kernel_name_buffer));
+        name_len =
+            strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg1, sizeof(kernel_name_buffer));
         if (name_len <= 0) {
             res = name_len < 0 ? name_len : -EINVAL;
             goto exit;

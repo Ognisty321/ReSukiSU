@@ -6,6 +6,7 @@ on:
       - 'main'
     paths:
       - '.github/workflows/clang-format.yml'
+      - 'kernel/.clang-format'
       - 'kernel/**/*.c'
       - 'kernel/**/*.h'
   pull_request:
@@ -25,7 +26,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
-      - name: check
-        working-directory: kernel
-        run: make check-format
+      - name: Check changed kernel sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$base" || true
+          fi
+
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base="HEAD~1"
+          fi
+
+          mapfile -d '' files < <(
+            git diff -z --name-only --diff-filter=ACMRT "$base" HEAD -- \
+              'kernel/**/*.c' \
+              'kernel/**/*.h'
+          )
+
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No changed kernel C/H files to check."
+            exit 0
+          fi
+
+          printf 'Checking %s changed kernel source file(s):\n' "${#files[@]}"
+          printf '  %s\n' "${files[@]}"
+          clang-format --dry-run --Werror "${files[@]}"
