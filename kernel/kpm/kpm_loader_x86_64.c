@@ -829,36 +829,36 @@ static u64 sukisu_kpm_call_origin(void *origin, int argno, u64 *args)
 
     switch (argno) {
     case 0:
-        return ((u64 (*)(void))origin)();
+        return ((u64(*)(void))origin)();
     case 1:
-        return ((u64 (*)(u64))origin)(args[0]);
+        return ((u64(*)(u64))origin)(args[0]);
     case 2:
-        return ((u64 (*)(u64, u64))origin)(args[0], args[1]);
+        return ((u64(*)(u64, u64))origin)(args[0], args[1]);
     case 3:
-        return ((u64 (*)(u64, u64, u64))origin)(args[0], args[1], args[2]);
+        return ((u64(*)(u64, u64, u64))origin)(args[0], args[1], args[2]);
     case 4:
-        return ((u64 (*)(u64, u64, u64, u64))origin)(args[0], args[1], args[2], args[3]);
+        return ((u64(*)(u64, u64, u64, u64))origin)(args[0], args[1], args[2], args[3]);
     case 5:
-        return ((u64 (*)(u64, u64, u64, u64, u64))origin)(args[0], args[1], args[2], args[3], args[4]);
+        return ((u64(*)(u64, u64, u64, u64, u64))origin)(args[0], args[1], args[2], args[3], args[4]);
     case 6:
-        return ((u64 (*)(u64, u64, u64, u64, u64, u64))origin)(args[0], args[1], args[2], args[3], args[4], args[5]);
+        return ((u64(*)(u64, u64, u64, u64, u64, u64))origin)(args[0], args[1], args[2], args[3], args[4], args[5]);
     case 7:
-        return ((u64 (*)(u64, u64, u64, u64, u64, u64, u64))origin)(args[0], args[1], args[2], args[3], args[4],
-                                                                    args[5], args[6]);
+        return ((u64(*)(u64, u64, u64, u64, u64, u64, u64))origin)(args[0], args[1], args[2], args[3], args[4], args[5],
+                                                                   args[6]);
     case 8:
-        return ((u64 (*)(u64, u64, u64, u64, u64, u64, u64, u64))origin)(args[0], args[1], args[2], args[3], args[4],
-                                                                         args[5], args[6], args[7]);
+        return ((u64(*)(u64, u64, u64, u64, u64, u64, u64, u64))origin)(args[0], args[1], args[2], args[3], args[4],
+                                                                        args[5], args[6], args[7]);
     case 9:
-        return ((u64 (*)(u64, u64, u64, u64, u64, u64, u64, u64, u64))origin)(
+        return ((u64(*)(u64, u64, u64, u64, u64, u64, u64, u64, u64))origin)(
             args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]);
     case 10:
-        return ((u64 (*)(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64))origin)(
+        return ((u64(*)(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64))origin)(
             args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9]);
     case 11:
-        return ((u64 (*)(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64))origin)(
+        return ((u64(*)(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64))origin)(
             args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10]);
     default:
-        return ((u64 (*)(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64))origin)(
+        return ((u64(*)(u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64))origin)(
             args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8], args[9], args[10],
             args[11]);
     }
