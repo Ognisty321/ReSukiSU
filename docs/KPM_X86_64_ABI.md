@@ -216,7 +216,7 @@ Run:
 scripts/fuzz-kpm-x86-smoke.sh
 ```
 
-When libFuzzer and sanitizer runtimes are installed, the script uses `-fsanitize=fuzzer,address,undefined`. If the local clang package lacks those runtimes, it falls back to a standalone corpus smoke run so CI and developer machines still exercise malformed ELF input parsing.
+When libFuzzer and sanitizer runtimes are installed, the script uses `-fsanitize=fuzzer,address,undefined`. If the local clang package lacks those runtimes, it falls back to a standalone corpus smoke run so CI and developer machines still exercise malformed ELF input parsing. The smoke corpus includes static malformed seeds, the built x86_64 example KPM objects and deterministic mutations of ELF header and section table fields.
 
 ## Preflight
 

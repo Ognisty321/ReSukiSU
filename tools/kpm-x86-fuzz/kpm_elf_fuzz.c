@@ -67,6 +67,27 @@ static bool section_name_is(const uint8_t *strtab, uint64_t size, const Elf64_Sh
 	return memcmp(strtab + shdr->sh_name, name, len + 1) == 0;
 }
 
+static uint64_t rela_write_width(uint32_t type)
+{
+	switch (type) {
+	case R_X86_64_64:
+	case R_X86_64_PC64:
+		return 8;
+	case R_X86_64_32:
+	case R_X86_64_32S:
+	case R_X86_64_PC32:
+	case R_X86_64_PLT32:
+	case R_X86_64_GOTPCREL:
+	case R_X86_64_GOTPCRELX:
+	case R_X86_64_REX_GOTPCRELX:
+		return 4;
+	case R_X86_64_NONE:
+		return 0;
+	default:
+		return UINT64_MAX;
+	}
+}
+
 static void validate_rela_section(const uint8_t *data, size_t size, const Elf64_Shdr *rela,
 				  const Elf64_Shdr *target, uint16_t shnum)
 {
@@ -86,28 +107,18 @@ static void validate_rela_section(const uint8_t *data, size_t size, const Elf64_
 	for (i = 0; i < count; i++) {
 		Elf64_Rela rel;
 		uint32_t type;
+		uint64_t width;
 
 		if (!read_rela(data, size, rela->sh_offset + i * sizeof(rel), &rel))
 			return;
 		type = ELF64_R_TYPE(rel.r_info);
-
-		switch (type) {
-		case R_X86_64_NONE:
-		case R_X86_64_64:
-		case R_X86_64_32:
-		case R_X86_64_32S:
-		case R_X86_64_PC32:
-		case R_X86_64_PLT32:
-		case R_X86_64_PC64:
-		case R_X86_64_GOTPCREL:
-		case R_X86_64_GOTPCRELX:
-		case R_X86_64_REX_GOTPCRELX:
-			break;
-		default:
+		width = rela_write_width(type);
+		if (width == UINT64_MAX)
 			return;
-		}
 
-		if (rel.r_offset > target->sh_size)
+		if (width && rel.r_offset > target->sh_size)
+			return;
+		if (width && width > target->sh_size - rel.r_offset)
 			return;
 	}
 }
