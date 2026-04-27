@@ -52,6 +52,10 @@
 #define SUKISU_KPM_HOOK_BAD_RELO 4092
 #define SUKISU_KPM_HOOK_TRANSIT_NO_MEM 4091
 #define SUKISU_KPM_HOOK_CHAIN_FULL 4090
+#define SUKISU_KPM_HOOK_RESERVED_TEXT 4089
+#define SUKISU_KPM_HOOK_TEXT_POKE_FAILED 4088
+#define SUKISU_KPM_HOOK_PERM_FAILED 4087
+#define SUKISU_KPM_HOOK_BAD_REPLACEMENT 4086
 #define SUKISU_KPM_PATCH_FLAGS (KSU_PATCH_TEXT_FLUSH_DCACHE | KSU_PATCH_TEXT_FLUSH_ICACHE)
 #define SUKISU_KPM_X86_JMP_ABS_SIZE 14
 #define SUKISU_KPM_X86_MAX_STOLEN_SIZE 32
@@ -736,12 +740,14 @@ static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void
     unsigned int min_stolen_size;
     bool use_rel32;
     int rc;
+    int hook_rc = SUKISU_KPM_HOOK_BAD_RELO;
 
     if (backup)
         *backup = NULL;
-    if (sukisu_kpm_bad_hook_target_addr((unsigned long)func) ||
-        sukisu_kpm_bad_exec_addr((unsigned long)replace, allow_generated_replace))
+    if (sukisu_kpm_bad_hook_target_addr((unsigned long)func))
         return SUKISU_KPM_HOOK_BAD_ADDRESS;
+    if (sukisu_kpm_bad_exec_addr((unsigned long)replace, allow_generated_replace))
+        return SUKISU_KPM_HOOK_BAD_REPLACEMENT;
     if (sukisu_kpm_find_inline_hook_locked(func))
         return SUKISU_KPM_HOOK_DUPLICATED;
 
@@ -759,8 +765,10 @@ static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void
     }
     rc = sukisu_kpm_set_exec_rw_nx(hook->trampoline,
                                    SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE);
-    if (rc)
+    if (rc) {
+        hook_rc = SUKISU_KPM_HOOK_PERM_FAILED;
         goto err_free;
+    }
     memset(hook->trampoline, 0xcc, SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE);
 
     rc = sukisu_kpm_build_trampoline(func, hook->trampoline, min_stolen_size, &hook->stolen_size);
@@ -769,16 +777,21 @@ static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void
 
     if (sukisu_kpm_text_range_reserved(func, hook->stolen_size)) {
         rc = -EBUSY;
+        hook_rc = SUKISU_KPM_HOOK_RESERVED_TEXT;
         goto err_free;
     }
 
     rc = copy_from_kernel_nofault(hook->original, func, hook->stolen_size);
-    if (rc)
+    if (rc) {
+        hook_rc = SUKISU_KPM_HOOK_BAD_ADDRESS;
         goto err_free;
+    }
 
     rc = sukisu_kpm_set_exec_rox(hook->trampoline, SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE);
-    if (rc)
+    if (rc) {
+        hook_rc = SUKISU_KPM_HOOK_PERM_FAILED;
         goto err_free;
+    }
 
     if (use_rel32) {
         hook->patch_size = JMP32_INSN_SIZE;
@@ -790,8 +803,10 @@ static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void
         sukisu_kpm_make_abs_jmp(patch, replace);
         rc = sukisu_kpm_patch_bytes(func, patch, hook->patch_size);
     }
-    if (rc)
+    if (rc) {
+        hook_rc = SUKISU_KPM_HOOK_TEXT_POKE_FAILED;
         goto err_free;
+    }
 
     hook->func = func;
     hook->replace = replace;
@@ -803,10 +818,11 @@ static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void
     return SUKISU_KPM_HOOK_NO_ERR;
 
 err_free:
+    pr_warn("kpm: x86_64 inline hook failed func=%px replace=%px rc=%d hook_rc=%d\n", func, replace, rc, hook_rc);
     sukisu_kpm_free_generated_exec(hook->trampoline, SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE,
                                    false);
     kfree(hook);
-    return SUKISU_KPM_HOOK_BAD_RELO;
+    return hook_rc;
 }
 
 static int sukisu_kpm_unhook_locked(void *func)

@@ -144,6 +144,22 @@ Rejected or guarded targets include:
 5. RIP-relative displacement rewrites that overflow.
 6. Patch attempts from IRQ or atomic context.
 
+Inline hook install return codes:
+
+| Code | Meaning |
+| ---: | --- |
+| `0` | Hook installed. |
+| `4095` | Bad hook target address. |
+| `4094` | Hook already installed on this target. |
+| `4093` | Hook metadata allocation failed. |
+| `4092` | Prologue relocation or instruction copy is unsupported. |
+| `4091` | Trampoline or wrapper allocation failed. |
+| `4090` | Wrapper chain has no free slot. |
+| `4089` | Target text is reserved by ftrace, kprobes, alternatives, jump labels or static calls. |
+| `4088` | Text patch backend failed. |
+| `4087` | Memory permission transition failed. |
+| `4086` | Replacement function is outside allowed executable text. |
+
 ## Userspace Diagnostics
 
 `ksud kpm version` returns the compatibility string expected by Manager:
