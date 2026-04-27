@@ -27,6 +27,7 @@ The public ReSukiSU and SukiSU KPM flow expects ARM64 KernelPatch payloads. WSA 
 Detailed write up: [docs/WSA_X86_64_KPM.md](docs/WSA_X86_64_KPM.md).
 Manager packaging notes: [docs/MANAGER_X86_64.md](docs/MANAGER_X86_64.md).
 Module porting checklist: [docs/KPM_X86_64_PORTING.md](docs/KPM_X86_64_PORTING.md).
+Patch hygiene notes: [docs/UPSTREAMING_X86_64.md](docs/UPSTREAMING_X86_64.md).
 
 ## Where Does the Kernel Build Live?
 
