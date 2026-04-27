@@ -25,6 +25,8 @@ The public ReSukiSU and SukiSU KPM flow expects ARM64 KernelPatch payloads. WSA 
 10. `ksud kpm doctor` / `ksud kpm audit` diagnostics with capability, module hash and hook accounting output.
 
 Detailed write up: [docs/WSA_X86_64_KPM.md](docs/WSA_X86_64_KPM.md).
+Manager packaging notes: [docs/MANAGER_X86_64.md](docs/MANAGER_X86_64.md).
+Module porting checklist: [docs/KPM_X86_64_PORTING.md](docs/KPM_X86_64_PORTING.md).
 
 ## Where Does the Kernel Build Live?
 
@@ -56,7 +58,7 @@ That repository ships the tested release binary and the install guide.
 ## Compatibility
 
 1. ARM64 `.kpm` binaries cannot load on this x86_64 loader.
-2. KPMs with C source can be ported by rebuilding for x86_64 with the flags documented in [docs/WSA_X86_64_KPM.md](docs/WSA_X86_64_KPM.md#kpm-build-flags).
+2. KPMs with C source can be ported by rebuilding for x86_64 with the flags and checklist documented in [docs/KPM_X86_64_PORTING.md](docs/KPM_X86_64_PORTING.md).
 3. Direct syscall hook install is intentionally not exposed and returns `EOPNOTSUPP`.
 4. Runtime diagnostics are available with `ksud kpm doctor`, `ksud kpm doctor --json` and `ksud kpm audit --json`.
 

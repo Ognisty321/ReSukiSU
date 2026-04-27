@@ -42,6 +42,7 @@ verify_examples() {
 
 run bash -n \
 	"$ROOT/scripts/check-kpm-x86-abi.sh" \
+	"$ROOT/scripts/check-manager-kpm-x86.sh" \
 	"$ROOT/scripts/build-kpm-x86_64.sh" \
 	"$ROOT/scripts/fuzz-kpm-x86-smoke.sh" \
 	"$ROOT/scripts/kpm-x86-runtime-selftest.sh" \

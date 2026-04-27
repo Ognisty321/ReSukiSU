@@ -87,6 +87,8 @@ Recommended clang flags:
 
 KPM modules must not rely on userspace ABI features such as the red zone, SSE argument passing, PIC/PLT stubs or compiler-generated CFI/IBT landing pads.
 
+For a source-level ARM64 to x86_64 checklist, see [KPM_X86_64_PORTING.md](KPM_X86_64_PORTING.md).
+
 ## Feature Bits
 
 The loader exports these read-only symbols to KPM modules:

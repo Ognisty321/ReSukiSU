@@ -40,8 +40,10 @@ Not implemented in this release:
 6. [`kernel/supercall/dispatch.c`](../kernel/supercall/dispatch.c)
 7. [`userspace/ksud/src/android/cli.rs`](../userspace/ksud/src/android/cli.rs)
 8. [`docs/KPM_X86_64_ABI.md`](KPM_X86_64_ABI.md)
-9. [`examples/kpm-x86_64`](../examples/kpm-x86_64)
-10. [`tools/kpm-x86-fuzz`](../tools/kpm-x86-fuzz)
+9. [`docs/KPM_X86_64_PORTING.md`](KPM_X86_64_PORTING.md)
+10. [`docs/MANAGER_X86_64.md`](MANAGER_X86_64.md)
+11. [`examples/kpm-x86_64`](../examples/kpm-x86_64)
+12. [`tools/kpm-x86-fuzz`](../tools/kpm-x86-fuzz)
 
 ## Loader ABI
 
@@ -159,6 +161,22 @@ scripts/kpm-x86-preflight.sh
 ```
 
 The preflight runs the ABI/version guard, shell syntax checks, example build, ELF section validation, fuzz smoke and `ksud` Rust checks. Set `RUN_WSA=1` to append the live runtime self-test.
+
+## Manager Packaging
+
+ReSukiSU Manager must ship an Android x86_64 `libksud.so` with the `ksud kpm` command path. A stock Manager update can replace that library and make the UI show `Unsupported` while the kernel loader still works.
+
+Use the packaging guard before release:
+
+```sh
+scripts/check-manager-kpm-x86.sh /path/to/ReSukiSU-Manager.apk
+```
+
+The full checklist is in [MANAGER_X86_64.md](MANAGER_X86_64.md).
+
+## Porting KPM Source
+
+Prebuilt ARM64 `.kpm` binaries cannot run on this loader. Modules with source should be rebuilt as x86_64 `ET_REL` objects, with ARM64 assembly, syscall numbers and branch helpers removed or rewritten. The source-level checklist is in [KPM_X86_64_PORTING.md](KPM_X86_64_PORTING.md).
 
 ## Validation Done
 
