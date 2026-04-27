@@ -32,7 +32,8 @@ Included samples:
 
 1. `hello_kpm_x86_64` - minimal load/unload module.
 2. `control_kpm` - `.kpm.ctl0` return value handling.
-3. `inline_hook` - `hook` / `unhook` against a resolved kernel symbol.
-4. `fp_hook` - `fp_hook` / `fp_unhook` against a module-local function pointer.
-5. `hotpatch` - no-op transactional hotpatch call.
-6. `failure_cases` - unload refusal and control-assisted cleanup path.
+3. `control_owner` - hook ownership tagging from a `.kpm.ctl0` callback.
+4. `inline_hook` - `hook` / `unhook` against a resolved kernel symbol.
+5. `fp_hook` - `fp_hook` / `fp_unhook` against a module-local function pointer.
+6. `hotpatch` - no-op transactional hotpatch call.
+7. `failure_cases` - unload refusal and control-assisted cleanup path.

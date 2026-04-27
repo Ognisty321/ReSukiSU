@@ -143,7 +143,7 @@ Buildable examples live in `examples/kpm-x86_64`:
 scripts/build-kpm-x86_64.sh
 ```
 
-The examples cover hello, control, inline hook, function pointer hook, hotpatch and failure cases. They are compiled as `ET_REL` objects and keep the `.kpm.*` sections in the format required by the loader.
+The examples cover hello, control, control callback ownership, inline hook, function pointer hook, hotpatch and failure cases. They are compiled as `ET_REL` objects and keep the `.kpm.*` sections in the format required by the loader.
 
 For runtime validation against a booted WSA instance:
 
@@ -189,9 +189,10 @@ The release build was stress tested with capability KPMs covering:
 5. x86_64 instruction relocation cases including RIP relative MOV / LEA, ENDBR64, 10 byte `movabs`, refusal of `call rel32` and short branches in the prologue.
 6. Malformed `.kpm.info` rejection.
 7. Unsupported syscall hook rejection.
-8. `500` loops across `5` capability modules, for `2500` total load / control / unload cycles.
-9. Final `kpm num = 0`.
-10. Kernel log clean for `BUG`, `WARNING`, `Oops`, general protection faults, invalid opcode reports and use after free reports.
+8. Hook ownership tagging from a `.kpm.ctl0` callback.
+9. `500` loops across `5` capability modules, for `2500` total load / control / unload cycles.
+10. Final `kpm num = 0`.
+11. Kernel log clean for `BUG`, `WARNING`, `Oops`, general protection faults, invalid opcode reports and use after free reports.
 
 ## Open Validation
 

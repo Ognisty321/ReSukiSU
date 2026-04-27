@@ -193,10 +193,11 @@ It builds:
 
 1. `hello_kpm_x86_64`
 2. `control_kpm`
-3. `inline_hook`
-4. `fp_hook`
-5. `hotpatch`
-6. `failure_cases`
+3. `control_owner`
+4. `inline_hook`
+5. `fp_hook`
+6. `hotpatch`
+7. `failure_cases`
 
 Use:
 

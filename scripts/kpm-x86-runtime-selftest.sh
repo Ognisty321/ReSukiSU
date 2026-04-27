@@ -51,7 +51,10 @@ push_kpm() {
 cleanup_known_modules() {
 	local name
 
-	for name in control_kpm hotpatch fp_hook inline_hook failure_cases hello_kpm_x86_64; do
+	for name in control_owner control_kpm hotpatch fp_hook inline_hook failure_cases hello_kpm_x86_64; do
+		if [ "$name" = "control_owner" ]; then
+			adb_su "$KSUD kpm control '$name' cleanup" >/dev/null 2>&1 || true
+		fi
 		if [ "$name" = "failure_cases" ]; then
 			adb_su "$KSUD kpm control '$name' allow-exit" >/dev/null 2>&1 || true
 		fi
@@ -103,6 +106,21 @@ adb_su "$KSUD kpm info failure_cases" >/dev/null
 log "allow failure_cases unload"
 adb_su "$KSUD kpm control failure_cases allow-exit"
 adb_su "$KSUD kpm unload failure_cases"
+
+push_kpm control_owner
+log "load control_owner"
+adb_su "$KSUD kpm load '$REMOTE_DIR/control_owner.kpm'"
+log "install control-owned fp hook"
+adb_su "$KSUD kpm control control_owner install"
+log "expect control_owner unload refusal while hook is owned"
+if adb_su "$KSUD kpm unload control_owner" >/dev/null 2>&1; then
+	log "control_owner unload unexpectedly succeeded with an owned hook"
+	exit 1
+fi
+adb_su "$KSUD kpm info control_owner" >/dev/null
+log "cleanup control-owned fp hook"
+adb_su "$KSUD kpm control control_owner cleanup"
+adb_su "$KSUD kpm unload control_owner"
 
 push_kpm control_kpm
 log "load control_kpm for unload race"
