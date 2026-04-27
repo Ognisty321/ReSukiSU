@@ -26,14 +26,15 @@ ReSukiSU-x86_64-KPM-loader/0.20
 
 ## Local Packaging Check
 
-Use the packaging guard on either the APK or an extracted library:
+Use the packaging guard on the APK, an extracted library or a release `ksud` binary:
 
 ```sh
 scripts/check-manager-kpm-x86.sh /path/to/ReSukiSU-Manager.apk
 scripts/check-manager-kpm-x86.sh /path/to/libksud.so
+scripts/check-manager-kpm-x86.sh /path/to/ksud
 ```
 
-The script checks the x86_64 ELF header and scans for KPM userspace tokens. It is an APK packaging guard, not a substitute for the runtime `ksud kpm` commands above.
+The script checks the x86_64 ELF header and scans for KPM userspace tokens. It is a packaging guard, not a substitute for the runtime `ksud kpm` commands above.
 
 ## Release Notes Checklist
 

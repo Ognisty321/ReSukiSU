@@ -164,7 +164,7 @@ The preflight runs the ABI/version guard, shell syntax checks, example build, EL
 
 ## Manager Packaging
 
-ReSukiSU Manager must ship an Android x86_64 `libksud.so` with the `ksud kpm` command path. A stock Manager update can replace that library and make the UI show `Unsupported` while the kernel loader still works.
+ReSukiSU Manager must ship an Android x86_64 `libksud.so` with the `ksud kpm` command path. A stock Manager update can replace that library and make the UI show `Unsupported` while the kernel loader still works. The same guard can also check a release `ksud` binary.
 
 Use the packaging guard before release:
 

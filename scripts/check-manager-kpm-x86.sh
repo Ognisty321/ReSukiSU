@@ -3,10 +3,11 @@ set -euo pipefail
 
 usage() {
 	cat >&2 <<'USAGE'
-Usage: scripts/check-manager-kpm-x86.sh <manager.apk|libksud.so>
+Usage: scripts/check-manager-kpm-x86.sh <manager.apk|libksud.so|ksud>
 
-Checks that a ReSukiSU Manager APK or extracted libksud.so carries an x86_64
-Android KPM command path. This is a packaging guard for WSA x86_64 builds.
+Checks that a ReSukiSU Manager APK, extracted libksud.so or release ksud
+binary carries an x86_64 Android KPM command path. This is a packaging guard
+for WSA x86_64 builds.
 USAGE
 }
 
