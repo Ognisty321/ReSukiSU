@@ -1,0 +1,90 @@
+name: WSA x86_64 KPM report
+description: Report a WSA x86_64 KPM loader, ksud or module compatibility issue
+labels: ["wsa-x86_64", "kpm"]
+body:
+  - type: checkboxes
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I confirmed this is specific to the WSA x86_64 KPM port
+          required: true
+        - label: I searched existing issues in both Ognisty321/ReSukiSU and Ognisty321/WSA-Linux-Kernel
+          required: true
+        - label: I can reproduce this with the current WSA x86_64 kernel release or current main branch
+          required: true
+
+  - type: input
+    id: kernel_release
+    attributes:
+      label: Output of `adb shell uname -a`
+      placeholder: paste the full uname line
+    validations:
+      required: true
+
+  - type: input
+    id: kpm_version
+    attributes:
+      label: Output of `adb shell su -c "ksud kpm version"`
+      placeholder: ReSukiSU-x86_64-KPM-loader/0.20
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `adb shell su -c "ksud kpm doctor --json"`
+      render: json
+    validations:
+      required: true
+
+  - type: textarea
+    id: audit
+    attributes:
+      label: Output of `adb shell su -c "ksud kpm audit --json"`
+      render: json
+    validations:
+      required: false
+
+  - type: input
+    id: wsa_version
+    attributes:
+      label: WSA package version
+      placeholder: e.g. 2407.40000.4.0
+    validations:
+      required: true
+
+  - type: input
+    id: windows_build
+    attributes:
+      label: Windows build and Memory Integrity state
+      placeholder: e.g. 26200, Memory Integrity on
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: dmesg
+    attributes:
+      label: Relevant dmesg slice
+      description: Include KPM loader lines and any BUG, WARNING, Oops, KASAN, KCSAN, KFENCE, DEBUG_WX or lockdep output
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: module
+    attributes:
+      label: KPM module details
+      description: Module name, source if public, whether it was ported from ARM64 and any hook target names
+    validations:
+      required: false
