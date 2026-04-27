@@ -48,6 +48,17 @@ push_kpm() {
 	adb_su "cp '$tmp_file' '$REMOTE_DIR/$name.kpm' && chmod 600 '$REMOTE_DIR/$name.kpm'"
 }
 
+require_kpm_ksud() {
+	if adb_su "$KSUD kpm --help" >/dev/null 2>&1; then
+		return
+	fi
+
+	log "$KSUD does not expose the kpm subcommand"
+	log "install a ReSukiSU Manager/libksud build that includes the Android x86_64 KPM userspace path"
+	adb_su "$KSUD --help 2>&1 | head -80" || true
+	exit 2
+}
+
 cleanup_known_modules() {
 	local name
 
@@ -79,6 +90,7 @@ log "connecting to $ADB_TARGET"
 "$ADB" connect "$ADB_TARGET" >/dev/null || true
 "$ADB" wait-for-device
 
+require_kpm_ksud
 log "doctor"
 adb_su "$KSUD kpm doctor --json"
 cleanup_known_modules
