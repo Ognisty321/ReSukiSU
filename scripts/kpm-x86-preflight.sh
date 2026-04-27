@@ -49,6 +49,12 @@ run bash -n \
 	"$0"
 
 run bash "$ROOT/scripts/check-kpm-x86-abi.sh"
+if [ -f "$ROOT/userspace/ksud/target/x86_64-linux-android/release/ksud" ]; then
+	run bash "$ROOT/scripts/check-manager-kpm-x86.sh" \
+		"$ROOT/userspace/ksud/target/x86_64-linux-android/release/ksud"
+else
+	log "skipping Manager x86_64 packaging guard; no release ksud found"
+fi
 run bash "$ROOT/scripts/build-kpm-x86_64.sh" clean all
 verify_examples
 run bash "$ROOT/scripts/fuzz-kpm-x86-smoke.sh"
