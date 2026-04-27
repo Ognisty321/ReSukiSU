@@ -43,6 +43,8 @@
 
 #define KPM_NAME_LEN 32
 #define KPM_ARGS_LEN 1024
+#define KPM_INFO_LEN 1024
+#define KPM_AUDIT_LEN 8192
 
 #ifndef NO_OPTIMIZE
 #if defined(__GNUC__) && !defined(__clang__)
@@ -122,6 +124,33 @@ noinline NO_OPTIMIZE void sukisu_kpm_version(char *buf, int bufferSize)
 }
 EXPORT_SYMBOL(sukisu_kpm_version);
 
+noinline NO_OPTIMIZE void sukisu_kpm_audit(char *buf, int bufferSize, int *result)
+{
+    int rc = sukisu_kpm_loader_audit(buf, bufferSize);
+
+    if (result)
+        *result = rc;
+}
+EXPORT_SYMBOL(sukisu_kpm_audit);
+
+static void sukisu_kpm_caps(struct ksu_kpm_caps *caps)
+{
+    if (!caps)
+        return;
+
+    memset(caps, 0, sizeof(*caps));
+    caps->abi_version = SUKISU_KPM_X86_64_ABI_VERSION;
+    caps->feature_bits = SUKISU_KPM_X86_64_FEATURE_BITS;
+    sukisu_kpm_version(caps->loader_version, sizeof(caps->loader_version));
+}
+
+static int sukisu_kpm_copy_to_user(unsigned long dst, const void *src, unsigned long len)
+{
+    if (copy_to_user((void __user *)dst, src, len) != 0)
+        return -EFAULT;
+    return 0;
+}
+
 noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, unsigned long arg2,
                                unsigned long result_code)
 {
@@ -189,7 +218,7 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
         sukisu_kpm_num(&res);
     } else if (control_code == KSU_KPM_INFO) {
         char kernel_name_buffer[256] = { 0 };
-        char buf[256] = { 0 };
+        char buf[KPM_INFO_LEN] = { 0 };
         int size = 0;
         long name_len;
 
@@ -221,7 +250,7 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
             goto invalid_arg;
         }
 
-        res = copy_to_user(arg2, &buf, size);
+        res = sukisu_kpm_copy_to_user(arg2, &buf, size);
 
     } else if (control_code == KSU_KPM_LIST) {
         char buf[1024] = { 0 };
@@ -247,8 +276,10 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
             goto exit;
         }
 
-        if (copy_to_user(arg1, &buf, res + 1) != 0)
+        if (copy_to_user((void __user *)arg1, &buf, res + 1) != 0) {
             pr_info("kpm: Copy to user failed.");
+            res = -EFAULT;
+        }
 
     } else if (control_code == KSU_KPM_CONTROL) {
         char kpm_name[KPM_NAME_LEN] = { 0 };
@@ -292,7 +323,51 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
         if (len >= outlen)
             len = outlen - 1;
 
-        res = copy_to_user(arg1, &buffer, len + 1);
+        res = sukisu_kpm_copy_to_user(arg1, &buffer, len + 1);
+    } else if (control_code == KSU_KPM_CAPS) {
+        struct ksu_kpm_caps caps;
+        unsigned int outlen = (unsigned int)arg2;
+
+        if (arg1 == 0 || outlen < sizeof(caps)) {
+            res = -EINVAL;
+            goto exit;
+        }
+
+        if (!ksu_access_ok(arg1, sizeof(caps))) {
+            goto invalid_arg;
+        }
+
+        sukisu_kpm_caps(&caps);
+        res = sukisu_kpm_copy_to_user(arg1, &caps, sizeof(caps));
+    } else if (control_code == KSU_KPM_AUDIT) {
+        char *buf;
+        unsigned int outlen = (unsigned int)arg2;
+
+        if (arg1 == 0 || outlen == 0) {
+            res = -EINVAL;
+            goto exit;
+        }
+        if (outlen > KPM_AUDIT_LEN)
+            outlen = KPM_AUDIT_LEN;
+        if (!ksu_access_ok(arg1, outlen)) {
+            goto invalid_arg;
+        }
+
+        buf = kzalloc(outlen, GFP_KERNEL);
+        if (!buf) {
+            res = -ENOMEM;
+            goto exit;
+        }
+
+        sukisu_kpm_audit(buf, outlen, &res);
+        if (res >= 0) {
+            if (res >= outlen) {
+                res = -ENOBUFS;
+            } else if (copy_to_user(arg1, buf, res + 1) != 0) {
+                res = -EFAULT;
+            }
+        }
+        kfree(buf);
     }
 
 exit:

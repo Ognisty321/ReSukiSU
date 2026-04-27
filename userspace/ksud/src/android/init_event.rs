@@ -1,4 +1,7 @@
-#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "android"))]
+#[cfg(all(
+    any(target_arch = "aarch64", target_arch = "x86_64"),
+    target_os = "android"
+))]
 use crate::android::kpm;
 use crate::{
     android::{
@@ -96,7 +99,10 @@ pub fn on_post_data_fs() -> Result<()> {
         warn!("init features failed: {e}");
     }
 
-    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "android"))]
+    #[cfg(all(
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        target_os = "android"
+    ))]
     if let Err(e) = kpm::booted_load() {
         warn!("KPM: Failed to start KPM watcher: {e}");
     }

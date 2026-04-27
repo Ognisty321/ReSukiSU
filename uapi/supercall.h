@@ -194,6 +194,17 @@ DEFINE_KSU_UAPI_CONST(__u8, KSU_KPM_LIST, 4)
 DEFINE_KSU_UAPI_CONST(__u8, KSU_KPM_INFO, 5)
 DEFINE_KSU_UAPI_CONST(__u8, KSU_KPM_CONTROL, 6)
 DEFINE_KSU_UAPI_CONST(__u8, KSU_KPM_VERSION, 7)
+DEFINE_KSU_UAPI_CONST(__u8, KSU_KPM_CAPS, 8)
+DEFINE_KSU_UAPI_CONST(__u8, KSU_KPM_AUDIT, 9)
+
+#define KSU_KPM_LOADER_VERSION_STRING 64
+
+struct ksu_kpm_caps {
+    __u32 abi_version;
+    __u32 reserved;
+    __u64 feature_bits;
+    char loader_version[KSU_KPM_LOADER_VERSION_STRING];
+} __attribute__((packed));
 
 struct ksu_kpm_cmd {
     __u8 __user control_code;

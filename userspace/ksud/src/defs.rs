@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[cfg(target_os = "android")]
 mod android {
     use const_format::concatcp;

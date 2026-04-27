@@ -3,7 +3,10 @@ mod debug;
 mod dynamic_manager;
 mod feature;
 mod init_event;
-#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "android"))]
+#[cfg(all(
+    any(target_arch = "aarch64", target_arch = "x86_64"),
+    target_os = "android"
+))]
 mod kpm;
 mod ksucalls;
 mod late_load;

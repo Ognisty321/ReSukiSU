@@ -1,0 +1,45 @@
+name: KPM x86_64 ABI check
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/kpm-x86-abi.yml'
+      - 'README.md'
+      - 'SECURITY.md'
+      - 'docs/**'
+      - 'examples/kpm-x86_64/**'
+      - 'kernel/kpm/**'
+      - 'uapi/supercall.h'
+      - 'userspace/ksud/src/android/**'
+      - 'scripts/check-kpm-x86-abi.sh'
+      - 'scripts/build-kpm-x86_64.sh'
+      - 'scripts/fuzz-kpm-x86-smoke.sh'
+      - 'scripts/kpm-x86-preflight.sh'
+      - 'tools/kpm-x86-fuzz/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/kpm-x86-abi.yml'
+      - 'README.md'
+      - 'SECURITY.md'
+      - 'docs/**'
+      - 'examples/kpm-x86_64/**'
+      - 'kernel/kpm/**'
+      - 'uapi/supercall.h'
+      - 'userspace/ksud/src/android/**'
+      - 'scripts/check-kpm-x86-abi.sh'
+      - 'scripts/build-kpm-x86_64.sh'
+      - 'scripts/fuzz-kpm-x86-smoke.sh'
+      - 'scripts/kpm-x86-preflight.sh'
+      - 'tools/kpm-x86-fuzz/**'
+
+jobs:
+  kpm-x86-abi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run KPM x86_64 preflight
+        run: RUN_RUST=0 bash scripts/kpm-x86-preflight.sh

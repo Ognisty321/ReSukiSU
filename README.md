@@ -22,6 +22,7 @@ The public ReSukiSU and SukiSU KPM flow expects ARM64 KernelPatch payloads. WSA 
 7. `RW+NX` to `ROX` page transitions for trampolines and wrapper stubs.
 8. `synchronize_rcu_tasks_rude()` plus `synchronize_rcu_tasks()` before generated executable buffers are freed.
 9. Refusal of unsafe or conflicting hook targets owned by ftrace, kprobes, alternatives, jump labels or static calls.
+10. `ksud kpm doctor` / `ksud kpm audit` diagnostics with capability, module hash and hook accounting output.
 
 Detailed write up: [docs/WSA_X86_64_KPM.md](docs/WSA_X86_64_KPM.md).
 
@@ -38,6 +39,7 @@ That repository ships the tested release binary and the install guide.
 | Field | Value |
 | --- | --- |
 | KPM loader | `ReSukiSU-x86_64-KPM-loader/0.20` |
+| x86_64 KPM ABI | `1` |
 | WSA kernel build | `#20` |
 | Stress result | `500 loops x 5 modules = 2500 load/control/unload cycles` |
 | Final module count | `kpm num = 0` |
@@ -49,12 +51,14 @@ That repository ships the tested release binary and the install guide.
 3. [`kernel/kpm/kpm.c`](kernel/kpm/kpm.c) loader integration with the supercall path.
 4. [`kernel/hook/x86_64/patch_memory.c`](kernel/hook/x86_64/patch_memory.c) x86_64 text patching backend.
 5. [`userspace/ksud/src/android/cli.rs`](userspace/ksud/src/android/cli.rs) Android x86_64 `ksud kpm` command path.
+6. [`docs/KPM_X86_64_ABI.md`](docs/KPM_X86_64_ABI.md) formal x86_64 KPM ABI contract.
 
 ## Compatibility
 
 1. ARM64 `.kpm` binaries cannot load on this x86_64 loader.
 2. KPMs with C source can be ported by rebuilding for x86_64 with the flags documented in [docs/WSA_X86_64_KPM.md](docs/WSA_X86_64_KPM.md#kpm-build-flags).
 3. Direct syscall hook install is intentionally not exposed and returns `EOPNOTSUPP`.
+4. Runtime diagnostics are available with `ksud kpm doctor`, `ksud kpm doctor --json` and `ksud kpm audit --json`.
 
 ## Upstream
 

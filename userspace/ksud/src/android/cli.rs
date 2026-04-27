@@ -139,7 +139,10 @@ enum Commands {
     },
 
     /// KPM module manager
-    #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "android"))]
+    #[cfg(all(
+        any(target_arch = "aarch64", target_arch = "x86_64"),
+        target_os = "android"
+    ))]
     Kpm {
         #[command(subcommand)]
         command: kpm_cmd::Kpm,
@@ -531,7 +534,10 @@ enum UmountOp {
     List,
 }
 
-#[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "android"))]
+#[cfg(all(
+    any(target_arch = "aarch64", target_arch = "x86_64"),
+    target_os = "android"
+))]
 mod kpm_cmd {
     use std::path::PathBuf;
 
@@ -546,13 +552,29 @@ mod kpm_cmd {
         /// Get number of loaded modules
         Num,
         /// List loaded KPM modules
-        List,
+        List {
+            #[arg(long)]
+            json: bool,
+        },
         /// Get info of a KPM module: info <name>
         Info { name: String },
         /// Send control command to a KPM module: control <name> <args>
         Control { name: String, args: String },
         /// Print KPM Loader version
-        Version,
+        Version {
+            #[arg(long)]
+            json: bool,
+        },
+        /// Print KPM runtime diagnostics
+        Doctor {
+            #[arg(long)]
+            json: bool,
+        },
+        /// Print KPM module and hook audit
+        Audit {
+            #[arg(long)]
+            json: bool,
+        },
     }
 }
 
@@ -888,25 +910,28 @@ pub fn run() -> Result<()> {
                 Ok(())
             }
         },
-        #[cfg(all(any(target_arch = "aarch64", target_arch = "x86_64"), target_os = "android"))]
+        #[cfg(all(
+            any(target_arch = "aarch64", target_arch = "x86_64"),
+            target_os = "android"
+        ))]
         Commands::Kpm { command } => {
             use kpm_cmd::Kpm;
 
             use crate::android::kpm;
             match command {
-                Kpm::Load { path, args } => {
-                    kpm::load_module(path.to_str().unwrap(), args.as_deref())
-                }
+                Kpm::Load { path, args } => kpm::load_module(path, args.as_deref()),
                 Kpm::Unload { name } => kpm::unload_module(name),
                 Kpm::Num => kpm::num().map(|_| ()),
-                Kpm::List => kpm::list(),
-                Kpm::Info { name } => kpm::info(name),
+                Kpm::List { json } => kpm::list(json),
+                Kpm::Info { name } => kpm::info(&name),
                 Kpm::Control { name, args } => {
                     let ret = kpm::control(name, args)?;
                     println!("{ret}");
                     Ok(())
                 }
-                Kpm::Version => kpm::version(),
+                Kpm::Version { json } => kpm::version(json),
+                Kpm::Doctor { json } => kpm::doctor(json),
+                Kpm::Audit { json } => kpm::audit(json),
             }
         }
     };

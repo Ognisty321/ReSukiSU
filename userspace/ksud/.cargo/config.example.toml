@@ -5,6 +5,10 @@
 # Linux
 # CLANG_PATH=ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
 # CLANG++_PATH=ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++
+# X86_64_CLANG_PATH=ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android35-clang
+# X86_64_CLANG++_PATH=ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android35-clang++
+# LLVM_AR_PATH=ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+# SYSROOT_PATH=ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot
 
 # macOS
 # CLANG_PATH=ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android26-clang
@@ -19,6 +23,13 @@
 [target.aarch64-linux-android]
 linker = "CLANG_PATH"
 
+[target.x86_64-linux-android]
+linker = "X86_64_CLANG_PATH"
+
 [env]
 CC_aarch64_linux_android = "CLANG_PATH"
 CXX_aarch64_linux_android = "CLANG++_PATH"
+CC_x86_64_linux_android = "X86_64_CLANG_PATH"
+CXX_x86_64_linux_android = "X86_64_CLANG++_PATH"
+AR_x86_64_linux_android = "LLVM_AR_PATH"
+BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android = "--target=x86_64-linux-android35 --sysroot=SYSROOT_PATH"

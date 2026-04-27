@@ -20,6 +20,9 @@ Implemented:
 8. `synchronize_rcu_tasks_rude()` plus `synchronize_rcu_tasks()` before generated executable buffers are freed.
 9. Refusal of unsafe or conflicting hook targets owned by ftrace, kprobes, alternatives, jump labels or static calls.
 10. Refusal of patching from IRQ or atomic context.
+11. Userspace capability handshake through `KSU_KPM_CAPS`.
+12. Buildable x86_64 KPM SDK examples and ELF fuzz smoke CI.
+13. `ksud kpm audit` reporting with module source paths, SHA256 hashes where userspace can read the module file, hook counters and unload gate state.
 
 Not implemented in this release:
 
@@ -36,8 +39,15 @@ Not implemented in this release:
 5. [`kernel/hook/x86_64/patch_memory.c`](../kernel/hook/x86_64/patch_memory.c)
 6. [`kernel/supercall/dispatch.c`](../kernel/supercall/dispatch.c)
 7. [`userspace/ksud/src/android/cli.rs`](../userspace/ksud/src/android/cli.rs)
+8. [`docs/KPM_X86_64_ABI.md`](KPM_X86_64_ABI.md)
+9. [`examples/kpm-x86_64`](../examples/kpm-x86_64)
+10. [`tools/kpm-x86-fuzz`](../tools/kpm-x86-fuzz)
 
 ## Loader ABI
+
+The formal ABI contract is defined in [KPM_X86_64_ABI.md](KPM_X86_64_ABI.md). This section is a short operational summary.
+
+Current loader marker: `ReSukiSU-x86_64-KPM-loader/0.20`.
 
 KPM modules are x86_64 `ET_REL` ELF objects with these sections:
 
@@ -56,6 +66,8 @@ ctl    -> kpm_ctl1(a1, a2, a3)
 unload -> kpm_exit(reserved)
 ```
 
+The loader exports `kpm_loader_abi_version`, `kpm_abi_version`, `kpm_loader_feature_bits` and `kpm_feature_bits` as compatibility symbols so modules can check the runtime contract before using optional APIs. Userspace can read the same contract through `KSU_KPM_CAPS`, which is used by `ksud kpm doctor --json`.
+
 ## Hook Backend
 
 Normal in range inline hook:
@@ -72,6 +84,13 @@ Restore:
 3. `synchronize_rcu_tasks_rude()` and `synchronize_rcu_tasks()` are called before the trampoline pages are freed, so no task can still be running inside them.
 
 Far jump fallback: when the trampoline cannot be reached with a 5 byte `JMP rel32`, the install path falls back to a 14 byte absolute jump emitted by the existing ReSukiSU x86_64 text writer.
+
+## Safety Semantics
+
+1. `hotpatch(addrs, values, cnt)` now uses a prepare / commit / rollback model. The loader snapshots all original 32 bit values before patching. If any commit step fails, previously written values are restored and rollback failures are logged with the failing address.
+2. `unload` marks a module as unloading before calling `.kpm.exit`. While that flag is set, `control` returns `-EBUSY` and duplicate loads are refused because the module remains in the registry.
+3. If `.kpm.exit` returns an error, the module stays loaded instead of freeing executable memory that may still be referenced by hooks or callbacks.
+4. Hooks installed from a KPM `init`, `control` or `exit` context are tagged to that module. Unload is refused after `.kpm.exit` if owned inline hooks, function pointer hooks, wrapper chain items or active callbacks remain.
 
 ## KPM Build Flags
 
@@ -90,6 +109,48 @@ Rationale:
 5. `-mretpoline-external-thunk` routes indirect calls through the kernel retpoline thunks.
 6. `-fno-pic -fno-plt -fno-common` keep the object file structure that the loader expects.
 
+## Diagnostics
+
+The Android x86_64 `ksud kpm` path propagates kernel loader errors as command failures. For automation and Manager integration:
+
+```sh
+ksud kpm version --json
+ksud kpm list --json
+ksud kpm doctor
+ksud kpm doctor --json
+ksud kpm audit --json
+```
+
+`doctor` reports loader reachability, loaded module count, safe mode state and the `/data/adb/kpm` directory mode. The expected mode is `700`; the boot-time loader path creates or repairs that directory and rejects symlinks.
+`audit` reports the loader's hook accounting plus module source paths and SHA256 hashes for readable `.kpm` files.
+
+## SDK Examples
+
+Buildable examples live in `examples/kpm-x86_64`:
+
+```sh
+scripts/build-kpm-x86_64.sh
+```
+
+The examples cover hello, control, inline hook, function pointer hook, hotpatch and failure cases. They are compiled as `ET_REL` objects and keep the `.kpm.*` sections in the format required by the loader.
+
+For runtime validation against a booted WSA instance:
+
+```sh
+scripts/kpm-x86-runtime-selftest.sh
+```
+
+The self-test covers the `text_poke_bp` inline hook path, ROX trampoline transition, function pointer hook path, unload refusal/recovery and a short control/unload race, then scans dmesg for crash, sanitizer, `DEBUG_WX`, lockdep and use-after-free markers.
+It also removes the sample `.kpm` files from `/data/adb/kpm` during cleanup so they do not autoload on the next WSA boot.
+
+For the local all-in-one check used before syncing this submodule into the WSA kernel tree:
+
+```sh
+scripts/kpm-x86-preflight.sh
+```
+
+The preflight runs the ABI/version guard, shell syntax checks, example build, ELF section validation, fuzz smoke and `ksud` Rust checks. Set `RUN_WSA=1` to append the live runtime self-test.
+
 ## Validation Done
 
 The release build was stress tested with capability KPMs covering:
@@ -107,13 +168,13 @@ The release build was stress tested with capability KPMs covering:
 
 ## Open Validation
 
-The stock WSA configuration does not enable `KASAN`, `KCSAN`, `DEBUG_WX`, `IBT`, `CFI` or `FineIBT`. Validation rows that need these configs are tracked here for future debug kernel runs:
+The stock WSA configuration does not enable `KASAN`, `KCSAN`, `DEBUG_WX`, `IBT`, `CFI` or `FineIBT`. The WSA kernel tree carries optional validation overlays in `configs/wsa/fragments/` for debug, sanitizer and experimental IBT/CFI probe builds. Validation rows that need these configs are tracked here for future debug kernel runs:
 
 1. CFI / IBT / FineIBT compliance.
 2. `endbr64` preservation under IBT (hook at `func+4`).
 3. `text_poke_bp` atomicity under multi CPU stress.
 4. `KASAN_VMALLOC`, `KCSAN`, `KFENCE`, `DEBUG_WX`, `PROVE_LOCKING`, `DEBUG_LIST`, `DEBUG_KMEMLEAK` 24 hour stress soak.
-5. AFL++ / libFuzzer harness for the ELF parser.
+5. Longer AFL++ / libFuzzer runs beyond the smoke harness.
 6. ftrace / kprobes / livepatch coexistence.
 
 ## Compatibility
