@@ -86,6 +86,13 @@ Build the examples and inspect their ELF shape:
 ```sh
 scripts/build-kpm-x86_64.sh clean all
 make -C examples/kpm-x86_64 inspect
+scripts/check-kpm-module-x86.sh examples/kpm-x86_64/out/*.kpm
+```
+
+Run the same checker before adding a third-party module to a WSA compatibility row:
+
+```sh
+scripts/check-kpm-module-x86.sh /path/to/your_module.kpm
 ```
 
 On WSA:
@@ -114,3 +121,4 @@ Then scan the fresh `dmesg` slice for `kpm:`, `BUG`, `WARNING`, `Oops`, `KASAN`,
 | `4087` | Executable memory permission transition failed. |
 | `4086` | Replacement function is outside allowed executable text. |
 | Unload returns busy or fails | The module still owns hooks, wrapper chain items or active callbacks. |
+| `scripts/check-kpm-module-x86.sh` rejects the file | The file is not an x86_64 `ET_REL` KPM, is missing required `.kpm.*` sections, uses REL instead of RELA relocation sections or carries a relocation outside the loader ABI. |

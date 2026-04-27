@@ -12,6 +12,7 @@ Inspect:
 
 ```bash
 make -C examples/kpm-x86_64 inspect
+scripts/check-kpm-module-x86.sh examples/kpm-x86_64/out/*.kpm
 ```
 
 The generated files are written to `examples/kpm-x86_64/out/*.kpm`.

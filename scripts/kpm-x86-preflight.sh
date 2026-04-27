@@ -17,31 +17,23 @@ run() {
 }
 
 verify_examples() {
-	local f sec type
+	local files
 
-	for f in "$ROOT"/examples/kpm-x86_64/out/*.kpm; do
-		if [ ! -f "$f" ]; then
-			echo "missing built KPM examples in $ROOT/examples/kpm-x86_64/out" >&2
-			exit 1
-		fi
+	shopt -s nullglob
+	files=("$ROOT"/examples/kpm-x86_64/out/*.kpm)
+	shopt -u nullglob
 
-		type="$(readelf -h "$f" | awk '/Type:/ {print $2}')"
-		if [ "$type" != "REL" ]; then
-			echo "$f is not ET_REL: $type" >&2
-			exit 1
-		fi
+	if [ "${#files[@]}" -eq 0 ]; then
+		echo "missing built KPM examples in $ROOT/examples/kpm-x86_64/out" >&2
+		exit 1
+	fi
 
-		for sec in .kpm.info .kpm.init .kpm.exit; do
-			if ! readelf -S "$f" | grep -q "$sec"; then
-				echo "$f is missing $sec" >&2
-				exit 1
-			fi
-		done
-	done
+	run bash "$ROOT/scripts/check-kpm-module-x86.sh" "${files[@]}"
 }
 
 run bash -n \
 	"$ROOT/scripts/check-kpm-x86-abi.sh" \
+	"$ROOT/scripts/check-kpm-module-x86.sh" \
 	"$ROOT/scripts/check-manager-kpm-x86.sh" \
 	"$ROOT/scripts/build-kpm-x86_64.sh" \
 	"$ROOT/scripts/fuzz-kpm-x86-smoke.sh" \
