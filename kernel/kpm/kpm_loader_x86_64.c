@@ -255,16 +255,21 @@ struct sukisu_kpm_fp_wrap_chain {
     struct sukisu_kpm_module *owner;
 };
 
+struct sukisu_kpm_context_frame {
+    struct list_head list;
+    struct task_struct *task;
+    struct sukisu_kpm_module *module;
+};
+
 static LIST_HEAD(sukisu_kpm_modules);
 static LIST_HEAD(sukisu_kpm_inline_hooks);
 static LIST_HEAD(sukisu_kpm_fp_hooks);
 static LIST_HEAD(sukisu_kpm_wrap_chains);
 static LIST_HEAD(sukisu_kpm_fp_wrap_chains);
+static LIST_HEAD(sukisu_kpm_context_frames);
 static DEFINE_MUTEX(sukisu_kpm_module_lock);
 static DEFINE_MUTEX(sukisu_kpm_hook_lock);
 static DEFINE_MUTEX(sukisu_kpm_context_lock);
-static struct sukisu_kpm_module *sukisu_kpm_context_module;
-static struct task_struct *sukisu_kpm_context_task;
 
 static u32 sukisu_kpm_kver = LINUX_VERSION_CODE;
 static u32 sukisu_kpm_kpver = KERNEL_VERSION(0, 1, 0);
@@ -286,29 +291,50 @@ enum sukisu_kpm_ref_kind {
 
 static void sukisu_kpm_enter_module_context(struct sukisu_kpm_module *mod)
 {
+    struct sukisu_kpm_context_frame *frame;
+
+    frame = kzalloc(sizeof(*frame), GFP_KERNEL);
+    if (!frame) {
+        pr_err("kpm: failed to allocate module context for %s\n", mod && mod->info.name ? mod->info.name : "<unknown>");
+        return;
+    }
+
+    frame->task = current;
+    frame->module = mod;
+
     mutex_lock(&sukisu_kpm_context_lock);
-    sukisu_kpm_context_module = mod;
-    sukisu_kpm_context_task = current;
+    list_add(&frame->list, &sukisu_kpm_context_frames);
     mutex_unlock(&sukisu_kpm_context_lock);
 }
 
 static void sukisu_kpm_exit_module_context(struct sukisu_kpm_module *mod)
 {
+    struct sukisu_kpm_context_frame *frame;
+    struct sukisu_kpm_context_frame *tmp;
+
     mutex_lock(&sukisu_kpm_context_lock);
-    if (sukisu_kpm_context_module == mod && sukisu_kpm_context_task == current) {
-        sukisu_kpm_context_module = NULL;
-        sukisu_kpm_context_task = NULL;
+    list_for_each_entry_safe (frame, tmp, &sukisu_kpm_context_frames, list) {
+        if (frame->task == current && frame->module == mod) {
+            list_del(&frame->list);
+            kfree(frame);
+            break;
+        }
     }
     mutex_unlock(&sukisu_kpm_context_lock);
 }
 
 static struct sukisu_kpm_module *sukisu_kpm_current_module(void)
 {
+    struct sukisu_kpm_context_frame *frame;
     struct sukisu_kpm_module *mod = NULL;
 
     mutex_lock(&sukisu_kpm_context_lock);
-    if (sukisu_kpm_context_task == current)
-        mod = sukisu_kpm_context_module;
+    list_for_each_entry (frame, &sukisu_kpm_context_frames, list) {
+        if (frame->task == current) {
+            mod = frame->module;
+            break;
+        }
+    }
     mutex_unlock(&sukisu_kpm_context_lock);
     return mod;
 }
@@ -405,16 +431,28 @@ static int sukisu_kpm_set_exec_rox(void *ptr, size_t size)
     return 0;
 }
 
-static void sukisu_kpm_set_exec_rw_nx(void *ptr, size_t size)
+static int sukisu_kpm_set_exec_rw_nx(void *ptr, size_t size)
 {
     unsigned long start = (unsigned long)ptr;
     unsigned long pages = sukisu_kpm_pages_for_size(size);
+    int rc;
 
     if (!ptr || !pages)
-        return;
+        return -EINVAL;
 
-    set_memory_rw(start, pages);
-    set_memory_nx(start, pages);
+    rc = set_memory_rw(start, pages);
+    if (rc) {
+        pr_err("kpm: set_memory_rw failed for %px size=%zu rc=%d\n", ptr, size, rc);
+        return rc;
+    }
+
+    rc = set_memory_nx(start, pages);
+    if (rc) {
+        pr_err("kpm: set_memory_nx failed for %px size=%zu rc=%d\n", ptr, size, rc);
+        return rc;
+    }
+
+    return 0;
 }
 
 static void sukisu_kpm_sync_before_exec_free(void)
@@ -466,6 +504,46 @@ static uid_t sukisu_kpm_current_uid(void)
 static bool sukisu_kpm_bad_kernel_addr(unsigned long addr)
 {
     return !addr || !(addr & 0x8000000000000000ULL);
+}
+
+static bool sukisu_kpm_module_text_contains(const struct sukisu_kpm_module *mod, unsigned long addr)
+{
+    unsigned long start;
+    unsigned long end;
+
+    if (!mod || !mod->start || !mod->text_size)
+        return false;
+
+    start = (unsigned long)mod->start;
+    end = start + mod->text_size;
+    if (end < start)
+        return false;
+
+    return addr >= start && addr < end;
+}
+
+static bool sukisu_kpm_bad_hook_target_addr(unsigned long addr)
+{
+    if (sukisu_kpm_bad_kernel_addr(addr))
+        return true;
+
+    return !kernel_text_address(addr);
+}
+
+static bool sukisu_kpm_bad_exec_addr(unsigned long addr, bool allow_generated_exec)
+{
+    struct sukisu_kpm_module *mod;
+
+    if (sukisu_kpm_bad_kernel_addr(addr))
+        return true;
+    if (kernel_text_address(addr))
+        return false;
+
+    mod = sukisu_kpm_current_module();
+    if (sukisu_kpm_module_text_contains(mod, addr))
+        return false;
+
+    return !allow_generated_exec;
 }
 
 static int sukisu_kpm_patch_bytes(void *addr, const void *bytes, size_t len)
@@ -651,7 +729,7 @@ static struct sukisu_kpm_inline_hook *sukisu_kpm_find_inline_hook_locked(void *f
     return NULL;
 }
 
-static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void **backup)
+static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void **backup, bool allow_generated_replace)
 {
     struct sukisu_kpm_inline_hook *hook;
     u8 patch[SUKISU_KPM_X86_MAX_STOLEN_SIZE];
@@ -661,7 +739,8 @@ static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void
 
     if (backup)
         *backup = NULL;
-    if (sukisu_kpm_bad_kernel_addr((unsigned long)func) || sukisu_kpm_bad_kernel_addr((unsigned long)replace))
+    if (sukisu_kpm_bad_hook_target_addr((unsigned long)func) ||
+        sukisu_kpm_bad_exec_addr((unsigned long)replace, allow_generated_replace))
         return SUKISU_KPM_HOOK_BAD_ADDRESS;
     if (sukisu_kpm_find_inline_hook_locked(func))
         return SUKISU_KPM_HOOK_DUPLICATED;
@@ -678,7 +757,10 @@ static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void
         kfree(hook);
         return SUKISU_KPM_HOOK_TRANSIT_NO_MEM;
     }
-    sukisu_kpm_set_exec_rw_nx(hook->trampoline, SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE);
+    rc = sukisu_kpm_set_exec_rw_nx(hook->trampoline,
+                                   SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE);
+    if (rc)
+        goto err_free;
     memset(hook->trampoline, 0xcc, SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE);
 
     rc = sukisu_kpm_build_trampoline(func, hook->trampoline, min_stolen_size, &hook->stolen_size);
@@ -810,7 +892,7 @@ static int sukisu_kpm_patch_function_pointer(unsigned long fp_addr, void *replac
 
     if (backup)
         *backup = NULL;
-    if (sukisu_kpm_bad_kernel_addr(fp_addr) || sukisu_kpm_bad_kernel_addr((unsigned long)replace))
+    if (sukisu_kpm_bad_kernel_addr(fp_addr) || sukisu_kpm_bad_exec_addr((unsigned long)replace, false))
         return -EINVAL;
 
     rc = copy_from_kernel_nofault(&origin, (void *)fp_addr, sizeof(origin));
@@ -1018,7 +1100,11 @@ static void *sukisu_kpm_make_wrap_stub(void *chain, int argno, void *dispatcher)
     if (!stub)
         return NULL;
 
-    sukisu_kpm_set_exec_rw_nx(stub, SUKISU_KPM_X86_WRAP_STUB_SIZE);
+    rc = sukisu_kpm_set_exec_rw_nx(stub, SUKISU_KPM_X86_WRAP_STUB_SIZE);
+    if (rc) {
+        module_memfree(stub);
+        return NULL;
+    }
     memset(stub, 0xcc, SUKISU_KPM_X86_WRAP_STUB_SIZE);
     p = stub;
 
@@ -1272,8 +1358,8 @@ static int sukisu_kpm_hook_prepare(void *hook)
 {
     struct sukisu_kpm_kp_hook *kp_hook = hook;
 
-    if (!kp_hook || sukisu_kpm_bad_kernel_addr((unsigned long)kp_hook->func_addr) ||
-        sukisu_kpm_bad_kernel_addr((unsigned long)kp_hook->replace_addr))
+    if (!kp_hook || sukisu_kpm_bad_hook_target_addr((unsigned long)kp_hook->func_addr) ||
+        sukisu_kpm_bad_exec_addr((unsigned long)kp_hook->replace_addr, false))
         return SUKISU_KPM_HOOK_BAD_ADDRESS;
 
     kp_hook->origin_addr = kp_hook->func_addr;
@@ -1292,7 +1378,8 @@ static void sukisu_kpm_hook_install(void *hook)
         return;
 
     mutex_lock(&sukisu_kpm_hook_lock);
-    if (sukisu_kpm_install_inline_hook_locked((void *)kp_hook->func_addr, (void *)kp_hook->replace_addr, &backup) ==
+    if (sukisu_kpm_install_inline_hook_locked((void *)kp_hook->func_addr, (void *)kp_hook->replace_addr, &backup,
+                                              false) ==
         SUKISU_KPM_HOOK_NO_ERR)
         kp_hook->relo_addr = (u64)backup;
     mutex_unlock(&sukisu_kpm_hook_lock);
@@ -1315,7 +1402,7 @@ static int sukisu_kpm_hook(void *func, void *replace, void **backup)
     int rc;
 
     mutex_lock(&sukisu_kpm_hook_lock);
-    rc = sukisu_kpm_install_inline_hook_locked(func, replace, backup);
+    rc = sukisu_kpm_install_inline_hook_locked(func, replace, backup, false);
     mutex_unlock(&sukisu_kpm_hook_lock);
     return rc;
 }
@@ -1406,7 +1493,7 @@ static int sukisu_kpm_hook_wrap(void *func, int argno, void *before, void *after
         return SUKISU_KPM_HOOK_TRANSIT_NO_MEM;
     }
 
-    rc = sukisu_kpm_install_inline_hook_locked(func, chain->stub, &backup);
+    rc = sukisu_kpm_install_inline_hook_locked(func, chain->stub, &backup, true);
     if (rc) {
         sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
         kfree(chain);
@@ -2017,12 +2104,18 @@ static int sukisu_kpm_elf_header_check(struct sukisu_kpm_load_info *info)
 static int sukisu_kpm_move_module(struct sukisu_kpm_module *mod, struct sukisu_kpm_load_info *info)
 {
     int i;
+    int rc;
 
     mod->start = module_alloc(mod->size);
     if (!mod->start)
         return -ENOMEM;
 
-    sukisu_kpm_set_exec_rw_nx(mod->start, mod->size);
+    rc = sukisu_kpm_set_exec_rw_nx(mod->start, mod->size);
+    if (rc) {
+        module_memfree(mod->start);
+        mod->start = NULL;
+        return rc;
+    }
     memset(mod->start, 0, mod->size);
 
     for (i = 1; i < info->hdr->e_shnum; i++) {
@@ -2318,8 +2411,16 @@ static int sukisu_kpm_enable_text_exec(struct sukisu_kpm_module *mod)
 static void sukisu_kpm_disable_text_exec(struct sukisu_kpm_module *mod)
 {
     if (mod->start && mod->size) {
-        set_memory_rw((unsigned long)mod->start, mod->size >> PAGE_SHIFT);
-        set_memory_nx((unsigned long)mod->start, mod->size >> PAGE_SHIFT);
+        int rc;
+
+        rc = set_memory_rw((unsigned long)mod->start, mod->size >> PAGE_SHIFT);
+        if (rc)
+            pr_err("kpm: set_memory_rw failed while disabling %s rc=%d\n",
+                   mod->info.name ? mod->info.name : "<unknown>", rc);
+        rc = set_memory_nx((unsigned long)mod->start, mod->size >> PAGE_SHIFT);
+        if (rc)
+            pr_err("kpm: set_memory_nx failed while disabling %s rc=%d\n",
+                   mod->info.name ? mod->info.name : "<unknown>", rc);
     }
 }
 

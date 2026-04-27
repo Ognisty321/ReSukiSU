@@ -85,12 +85,19 @@ Restore:
 
 Far jump fallback: when the trampoline cannot be reached with a 5 byte `JMP rel32`, the install path falls back to a 14 byte absolute jump emitted by the existing ReSukiSU x86_64 text writer.
 
+Address validation:
+
+1. Inline hook targets must pass `kernel_text_address()`. A pointer that merely looks like a high-half kernel address is not enough.
+2. Replacement functions must be normal kernel text or text owned by the currently executing KPM module. Generated wrapper stubs are accepted only through the internal `hook_wrap` path.
+3. Function pointer hooks still validate the pointer slot as a writable kernel address, but their replacement target must satisfy the executable-address rule above.
+
 ## Safety Semantics
 
 1. `hotpatch(addrs, values, cnt)` now uses a prepare / commit / rollback model. The loader snapshots all original 32 bit values before patching. If any commit step fails, previously written values are restored and rollback failures are logged with the failing address.
 2. `unload` marks a module as unloading before calling `.kpm.exit`. While that flag is set, `control` returns `-EBUSY` and duplicate loads are refused because the module remains in the registry.
 3. If `.kpm.exit` returns an error, the module stays loaded instead of freeing executable memory that may still be referenced by hooks or callbacks.
 4. Hooks installed from a KPM `init`, `control` or `exit` context are tagged to that module. Unload is refused after `.kpm.exit` if owned inline hooks, function pointer hooks, wrapper chain items or active callbacks remain.
+5. Module ownership context is tracked per task and as a stack, so overlapping callbacks from different tasks cannot overwrite each other's current owner.
 
 ## KPM Build Flags
 
