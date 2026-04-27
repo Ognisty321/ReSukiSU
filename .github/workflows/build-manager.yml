@@ -247,8 +247,8 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v8
         with:
-            name: ${{ steps.determine.outputs.title }}-gradle-${{ matrix.build_type }}
-            path: artifacts/${{ steps.determine.outputs.title }}-gradle-${{ matrix.build_type }}
+          name: ${{ steps.determine.outputs.title }}-gradle-${{ matrix.build_type }}
+          path: artifacts/${{ steps.determine.outputs.title }}-gradle-${{ matrix.build_type }}
       
       - name: Download arm64 ksud
         uses: actions/download-artifact@v8
@@ -307,12 +307,31 @@ jobs:
             echo "SIGN_KEYSTORE_PASSWORD=$PR_KEYSTORE_PASSWORD" >> $GITHUB_ENV
             echo "SIGN_KEY_PASSWORD=$PR_KEY_PASSWORD" >> $GITHUB_ENV
           else
-            test -n "$PROD_KEYSTORE"
-            echo "$PROD_KEYSTORE" | base64 -d > key.jks
-            echo "SIGN_KEYSTORE_FILE=key.jks" >> $GITHUB_ENV
-            echo "SIGN_KEY_ALIAS=$PROD_KEY_ALIAS" >> $GITHUB_ENV
-            echo "SIGN_KEYSTORE_PASSWORD=$PROD_KEYSTORE_PASSWORD" >> $GITHUB_ENV
-            echo "SIGN_KEY_PASSWORD=$PROD_KEY_PASSWORD" >> $GITHUB_ENV
+            if [ -n "$PROD_KEYSTORE" ] && [ -n "$PROD_KEY_ALIAS" ] && \
+              [ -n "$PROD_KEYSTORE_PASSWORD" ] && [ -n "$PROD_KEY_PASSWORD" ]; then
+              echo "$PROD_KEYSTORE" | base64 -d > key.jks
+              echo "SIGN_KEYSTORE_FILE=key.jks" >> $GITHUB_ENV
+              echo "SIGN_KEY_ALIAS=$PROD_KEY_ALIAS" >> $GITHUB_ENV
+              echo "SIGN_KEYSTORE_PASSWORD=$PROD_KEYSTORE_PASSWORD" >> $GITHUB_ENV
+              echo "SIGN_KEY_PASSWORD=$PROD_KEY_PASSWORD" >> $GITHUB_ENV
+            else
+              echo "Production signing secrets are unavailable; using a temporary CI key."
+              CI_KEYSTORE_PASSWORD=$(openssl rand -hex 32)
+              CI_KEY_PASSWORD=$(openssl rand -hex 32)
+              keytool -genkeypair \
+                -alias ci-key \
+                -keyalg RSA -keysize 2048 \
+                -validity 1 \
+                -storepass "$CI_KEYSTORE_PASSWORD" \
+                -keypass "$CI_KEY_PASSWORD" \
+                -dname "CN=KernelSU CI Build" \
+                -storetype JKS \
+                -keystore ci-key.jks
+              echo "SIGN_KEYSTORE_FILE=ci-key.jks" >> $GITHUB_ENV
+              echo "SIGN_KEY_ALIAS=ci-key" >> $GITHUB_ENV
+              echo "SIGN_KEYSTORE_PASSWORD=$CI_KEYSTORE_PASSWORD" >> $GITHUB_ENV
+              echo "SIGN_KEY_PASSWORD=$CI_KEY_PASSWORD" >> $GITHUB_ENV
+            fi
           fi
 
       - name: Repack and resign
