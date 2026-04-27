@@ -14,11 +14,19 @@ on:
 jobs:
   synchronize-with-crowdin:
     runs-on: ubuntu-latest
+    env:
+      CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
+      CROWDIN_API_TOKEN: ${{ secrets.CROWDIN_API_TOKEN }}
     steps:
     - name: Checkout
       uses: actions/checkout@v6
 
+    - name: Check Crowdin secrets
+      if: ${{ env.CROWDIN_PROJECT_ID == '' || env.CROWDIN_API_TOKEN == '' }}
+      run: echo "Crowdin secrets are unavailable; skipping translation sync."
+
     - name: Crowdin Action
+      if: ${{ env.CROWDIN_PROJECT_ID != '' && env.CROWDIN_API_TOKEN != '' }}
       uses: crowdin/github-action@v2
       with:
         upload_sources: true
@@ -37,5 +45,5 @@ jobs:
         crowdin_branch_name: "main"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
-        CROWDIN_API_TOKEN: ${{ secrets.CROWDIN_API_TOKEN }}
+        CROWDIN_PROJECT_ID: ${{ env.CROWDIN_PROJECT_ID }}
+        CROWDIN_API_TOKEN: ${{ env.CROWDIN_API_TOKEN }}
