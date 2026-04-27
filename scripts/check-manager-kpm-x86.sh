@@ -17,10 +17,14 @@ fi
 
 INPUT="$1"
 TMP=""
+STRINGS_TMP=""
 
 cleanup() {
 	if [ -n "$TMP" ]; then
 		rm -f "$TMP"
+	fi
+	if [ -n "$STRINGS_TMP" ]; then
+		rm -f "$STRINGS_TMP"
 	fi
 }
 trap cleanup EXIT
@@ -80,12 +84,16 @@ case "$machine" in
 esac
 
 missing=0
+STRINGS_TMP="$(mktemp "${TMPDIR:-/tmp}/libksud-strings.XXXXXX")"
+strings "$LIB" >"$STRINGS_TMP"
+
 for token in \
 	"KPM module manager" \
-	"/data/adb/kpm" \
+	"Load a KPM module" \
+	"Print KPM Loader version" \
 	"Failed to get kpm audit" \
-	"autoload_disabled"; do
-	if ! strings "$LIB" | grep -Fq "$token"; then
+	"/data/adb/kpm"; do
+	if ! grep -Fq "$token" "$STRINGS_TMP"; then
 		echo "missing KPM userspace token in libksud.so: $token" >&2
 		missing=1
 	fi
