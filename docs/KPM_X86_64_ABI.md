@@ -179,7 +179,7 @@ ksud kpm audit
 ksud kpm audit --json
 ```
 
-`doctor` reports loader reachability, loaded module count, safe mode state and `/data/adb/kpm` hardening status.
+`doctor` reports loader reachability, loaded module count, safe mode state, autoload disable state and `/data/adb/kpm` hardening status.
 
 `audit` reports loader feature metadata, loaded modules, source paths, SHA256 hashes for readable module files, active hook/callback counters and active hook records. The loader tags hooks installed from a module's `init`, `control` or `exit` context and refuses unload if `.kpm.exit` returns success but owned hooks or callback chain items are still present.
 

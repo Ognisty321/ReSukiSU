@@ -14,6 +14,7 @@ use crate::android::ksucalls::ksuctl;
 use crate::ksu_uapi;
 
 const KPM_DIR: &str = "/data/adb/kpm";
+const KPM_DISABLE_FILE: &str = "/data/adb/kpm.disabled";
 const KPM_DIR_MODE: u32 = 0o700;
 
 struct KpmDirStatus {
@@ -285,6 +286,7 @@ pub fn doctor(json_output: bool) -> Result<()> {
     let kernel_release = kernel_release().map_err(|e| e.to_string());
     let dir = inspect_kpm_dir();
     let safe_mode = crate::android::utils::is_safe_mode();
+    let autoload_disabled = Path::new(KPM_DISABLE_FILE).exists();
 
     if json_output {
         println!(
@@ -309,6 +311,8 @@ pub fn doctor(json_output: bool) -> Result<()> {
                     "expected_mode": format!("{KPM_DIR_MODE:o}"),
                     "ok": dir.ok(),
                 },
+                "autoload_disabled": autoload_disabled,
+                "autoload_disable_file": KPM_DISABLE_FILE,
                 "safe_mode": safe_mode,
             }))?
         );
@@ -344,6 +348,8 @@ pub fn doctor(json_output: bool) -> Result<()> {
         );
         println!("kpm_dir_expected_mode={KPM_DIR_MODE:o}");
         println!("kpm_dir_ok={}", dir.ok());
+        println!("autoload_disabled={autoload_disabled}");
+        println!("autoload_disable_file={KPM_DISABLE_FILE}");
         println!("safe_mode={safe_mode}");
     }
 
@@ -445,7 +451,18 @@ pub fn booted_load() -> Result<()> {
         return Ok(());
     }
 
-    load_all_modules()?;
+    if Path::new(KPM_DISABLE_FILE).exists() {
+        log::warn!("KPM: autoload disabled by {KPM_DISABLE_FILE}");
+        return Ok(());
+    }
+
+    if let Err(err) = load_all_modules() {
+        let marker = format!("autoload disabled after boot failure: {err}\n");
+        if let Err(write_err) = fs::write(KPM_DISABLE_FILE, marker) {
+            log::error!("KPM: failed to write {KPM_DISABLE_FILE}: {write_err}");
+        }
+        return Err(err);
+    }
 
     Ok(())
 }

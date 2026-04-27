@@ -131,6 +131,8 @@ ksud kpm audit --json
 `doctor` reports loader reachability, loaded module count, safe mode state and the `/data/adb/kpm` directory mode. The expected mode is `700`; the boot-time loader path creates or repairs that directory and rejects symlinks.
 `audit` reports the loader's hook accounting plus module source paths and SHA256 hashes for readable `.kpm` files.
 
+Boot-time KPM autoload is skipped when `/data/adb/kpm.disabled` exists. If autoload sees one or more module load failures during boot, `ksud` writes that marker so the next boot does not keep retrying the same broken autoload set. Remove the marker after fixing or removing the bad `.kpm` files.
+
 ## SDK Examples
 
 Buildable examples live in `examples/kpm-x86_64`:
