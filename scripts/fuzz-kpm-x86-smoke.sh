@@ -14,8 +14,9 @@ trap 'rm -f "$FUZZER_LOG"; rm -rf "$WORK_CORPUS"' EXIT
 
 copy_seed() {
 	local src="$1"
-	local dst="$WORK_CORPUS/$(basename "$src")"
+	local dst
 
+	dst="$WORK_CORPUS/$(basename "$src")"
 	cp "$src" "$dst"
 	printf '%s\n' "$dst"
 }

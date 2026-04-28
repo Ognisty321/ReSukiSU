@@ -787,8 +787,8 @@ static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void
         kfree(hook);
         return SUKISU_KPM_HOOK_TRANSIT_NO_MEM;
     }
-    rc = sukisu_kpm_set_exec_rw_nx(hook->trampoline,
-                                   SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE);
+    rc = sukisu_kpm_set_exec_rw_nx(
+        hook->trampoline, SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE);
     if (rc) {
         hook_rc = SUKISU_KPM_HOOK_PERM_FAILED;
         goto err_free;
@@ -1536,9 +1536,9 @@ static int sukisu_kpm_syscall_wrap(int nr, int narg, int is_compat, void *before
     created = true;
 
 add_item:
-    rc = sukisu_kpm_add_chain_item(chain->states, chain->owners, SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM, chain->befores,
-                                   chain->afters, chain->udata, before, after, udata,
-                                   sukisu_kpm_current_module(), SUKISU_KPM_REF_SYSCALL_WRAP);
+    rc = sukisu_kpm_add_chain_item(
+        chain->states, chain->owners, SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM, chain->befores, chain->afters, chain->udata,
+        before, after, udata, sukisu_kpm_current_module(), SUKISU_KPM_REF_SYSCALL_WRAP);
     if (rc && created) {
         WRITE_ONCE(chain->disabled, true);
         sukisu_kpm_patch_bytes((void *)chain->slot_addr, &origin, sizeof(origin));
@@ -1568,9 +1568,9 @@ static void sukisu_kpm_syscall_unwrap(int nr, int is_compat, void *before, void 
         return;
     }
 
-    removed = sukisu_kpm_remove_chain_item(chain->states, chain->owners, SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM,
-                                           chain->befores, chain->afters, chain->udata, before, after,
-                                           SUKISU_KPM_REF_SYSCALL_WRAP);
+    removed = sukisu_kpm_remove_chain_item(
+        chain->states, chain->owners, SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM, chain->befores, chain->afters, chain->udata,
+        before, after, SUKISU_KPM_REF_SYSCALL_WRAP);
     if (!removed) {
         mutex_unlock(&sukisu_kpm_hook_lock);
         return;
@@ -1679,8 +1679,7 @@ static void sukisu_kpm_hook_install(void *hook)
 
     mutex_lock(&sukisu_kpm_hook_lock);
     if (sukisu_kpm_install_inline_hook_locked((void *)kp_hook->func_addr, (void *)kp_hook->replace_addr, &backup,
-                                              false) ==
-        SUKISU_KPM_HOOK_NO_ERR)
+                                              false) == SUKISU_KPM_HOOK_NO_ERR)
         kp_hook->relo_addr = (u64)backup;
     mutex_unlock(&sukisu_kpm_hook_lock);
 }
@@ -2780,8 +2779,8 @@ static unsigned int sukisu_kpm_module_active_callbacks_locked(const struct sukis
             active += atomic_read(&fp_wrap->active);
     }
     list_for_each_entry (syscall_wrap, &sukisu_kpm_syscall_wrap_chains, list) {
-        if (sukisu_kpm_chain_has_owner(syscall_wrap->owners, syscall_wrap->states,
-                                       SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM, mod))
+        if (sukisu_kpm_chain_has_owner(syscall_wrap->owners, syscall_wrap->states, SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM,
+                                       mod))
             active += atomic_read(&syscall_wrap->active);
     }
 
