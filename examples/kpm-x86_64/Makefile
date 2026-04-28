@@ -24,7 +24,7 @@ KPM_CFLAGS := \
 	-Werror \
 	-Iinclude
 
-EXAMPLES := hello_kpm_x86_64 control_kpm control_owner inline_hook fp_hook hotpatch failure_cases
+EXAMPLES := hello_kpm_x86_64 control_kpm control_owner inline_hook fp_hook hotpatch failure_cases syscall_wrap
 OUT := out
 KPM_FILES := $(addprefix $(OUT)/,$(addsuffix .kpm,$(EXAMPLES)))
 

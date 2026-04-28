@@ -575,6 +575,17 @@ mod kpm_cmd {
             #[arg(long)]
             json: bool,
         },
+        /// Print boot-time KPM autoload status
+        AutoloadStatus {
+            #[arg(long)]
+            json: bool,
+        },
+        /// Disable boot-time KPM autoload
+        AutoloadDisable { reason: Option<String> },
+        /// Enable boot-time KPM autoload
+        AutoloadEnable,
+        /// Load all .kpm files from the autoload directory now
+        AutoloadNow,
     }
 }
 
@@ -932,6 +943,10 @@ pub fn run() -> Result<()> {
                 Kpm::Version { json } => kpm::version(json),
                 Kpm::Doctor { json } => kpm::doctor(json),
                 Kpm::Audit { json } => kpm::audit(json),
+                Kpm::AutoloadStatus { json } => kpm::autoload_status(json),
+                Kpm::AutoloadDisable { reason } => kpm::autoload_disable(reason),
+                Kpm::AutoloadEnable => kpm::autoload_enable(),
+                Kpm::AutoloadNow => kpm::autoload_now(),
             }
         }
     };

@@ -7,7 +7,7 @@ use std::{
     path::Path,
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::json;
 
 use crate::android::ksucalls::ksuctl;
@@ -442,6 +442,69 @@ pub fn audit(json_output: bool) -> Result<()> {
     Ok(())
 }
 
+pub fn autoload_status(json_output: bool) -> Result<()> {
+    let dir = inspect_kpm_dir();
+    let disabled = Path::new(KPM_DISABLE_FILE).exists();
+    let disable_reason = fs::read_to_string(KPM_DISABLE_FILE).ok();
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "autoload_disabled": disabled,
+                "autoload_disable_file": KPM_DISABLE_FILE,
+                "autoload_disable_reason": disable_reason.as_deref(),
+                "kpm_dir": {
+                    "path": KPM_DIR,
+                    "exists": dir.exists,
+                    "is_dir": dir.is_dir,
+                    "is_symlink": dir.is_symlink,
+                    "mode": dir.mode.map(|mode| format!("{mode:o}")),
+                    "expected_mode": format!("{KPM_DIR_MODE:o}"),
+                    "ok": dir.ok(),
+                },
+            }))?
+        );
+    } else {
+        println!("autoload_disabled={disabled}");
+        println!("autoload_disable_file={KPM_DISABLE_FILE}");
+        if let Some(reason) = disable_reason {
+            print!("autoload_disable_reason={reason}");
+            if !reason.ends_with('\n') {
+                println!();
+            }
+        }
+        println!("kpm_dir={KPM_DIR}");
+        println!("kpm_dir_ok={}", dir.ok());
+    }
+
+    Ok(())
+}
+
+pub fn autoload_disable(reason: Option<String>) -> Result<()> {
+    let marker = reason.map_or_else(
+        || "autoload disabled by user\n".to_string(),
+        |reason| format!("autoload disabled by user: {reason}\n"),
+    );
+    fs::write(KPM_DISABLE_FILE, marker)
+        .with_context(|| format!("Failed to write {KPM_DISABLE_FILE}"))?;
+    Ok(())
+}
+
+pub fn autoload_enable() -> Result<()> {
+    match fs::remove_file(KPM_DISABLE_FILE) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("Failed to remove {KPM_DISABLE_FILE}")),
+    }
+}
+
+pub fn autoload_now() -> Result<()> {
+    check_version()?;
+    ensure_dir()?;
+    load_all_modules()
+}
+
 pub fn booted_load() -> Result<()> {
     check_version()?;
     ensure_dir()?;
@@ -469,6 +532,7 @@ pub fn booted_load() -> Result<()> {
 
 fn load_all_modules() -> Result<()> {
     let dir = Path::new(KPM_DIR);
+    let mut modules = Vec::new();
     let mut failures = 0;
 
     if !dir.is_dir() {
@@ -478,13 +542,36 @@ fn load_all_modules() -> Result<()> {
     for entry in dir.read_dir()? {
         let p = entry?.path();
 
-        if p.extension() == Some(OsStr::new("kpm")) {
-            if let Err(e) = load_module(&p, None) {
+        if p.extension() != Some(OsStr::new("kpm")) {
+            continue;
+        }
+
+        match fs::symlink_metadata(&p) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
                 failures += 1;
-                log::error!("KPM: failed to load {}: {e}", p.display());
+                log::error!("KPM: refusing symlink autoload module {}", p.display());
+            }
+            Ok(metadata) if metadata.is_file() => modules.push(p),
+            Ok(_) => {
+                failures += 1;
+                log::error!("KPM: refusing non-file autoload module {}", p.display());
+            }
+            Err(err) => {
+                failures += 1;
+                log::error!("KPM: failed to inspect {}: {err}", p.display());
             }
         }
     }
+
+    modules.sort();
+
+    for p in modules {
+        if let Err(e) = load_module(&p, None) {
+            failures += 1;
+            log::error!("KPM: failed to load {}: {e}", p.display());
+        }
+    }
+
     if failures > 0 {
         bail!("KPM: {failures} module(s) failed to load");
     }

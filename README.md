@@ -41,7 +41,7 @@ That repository ships the tested release binary and the install guide.
 
 | Field | Value |
 | --- | --- |
-| KPM loader | `ReSukiSU-x86_64-KPM-loader/0.20` |
+| KPM loader | `ReSukiSU-x86_64-KPM-loader/0.21` |
 | x86_64 KPM ABI | `1` |
 | WSA kernel build | `#20` |
 | Stress result | `500 loops x 5 modules = 2500 load/control/unload cycles` |

@@ -34,7 +34,7 @@ Replace ARM64-specific code before the first WSA test:
 1. Remove AArch64 inline assembly such as `mrs sp_el0`, `tcr_el1`, `br`, `blr` and `ret` stubs.
 2. Replace fixed 4 byte instruction assumptions with x86_64 instruction-length aware logic, or use the loader `hook` API and let it decode the prologue.
 3. Remove `R_AARCH64_*` relocation assumptions. The x86_64 loader accepts the relocation set documented in `KPM_X86_64_ABI.md`.
-4. Replace ARM64 syscall numbers and direct syscall-table hook logic. Direct syscall hook install returns `EOPNOTSUPP` on this runtime.
+4. Replace ARM64 syscall numbers and direct syscall-table hook logic. Native x86_64 syscall wrapping is available through `hook_syscalln`; compat syscall wrapping still returns `EOPNOTSUPP`.
 5. Re-check all struct offsets against the WSA `5.15.104` kernel source, not against a phone kernel.
 6. Avoid device-specific symbols unless the WSA kernel exports or resolves them.
 
@@ -66,7 +66,7 @@ Before calling `hook()`:
 
 1. Resolve the target symbol on the WSA kernel you are actually running.
 2. Prefer normal C functions in core kernel text.
-3. Avoid syscall table entries, ftrace-owned call sites, kprobes, alternatives, jump labels, static calls, `.entry.text` and `.noinstr.text`.
+3. Avoid text-patching syscall entry code, ftrace-owned call sites, kprobes, alternatives, jump labels, static calls, `.entry.text` and `.noinstr.text`; use `hook_syscalln` for native syscall-table wrapping.
 4. Keep replacement functions in module text or normal kernel text.
 5. Always keep and use the backup trampoline returned by `hook()`.
 6. Unhook in `.kpm.exit` before returning success.

@@ -35,7 +35,7 @@ for token in KSU_KPM_CAPS ksu_kpm_caps KSU_KPM_AUDIT; do
   fi
 done
 
-for token in SUKISU_KPM_X86_64_FEATURE_AUDIT SUKISU_KPM_X86_64_FEATURE_UNLOAD_GATE; do
+for token in SUKISU_KPM_X86_64_FEATURE_AUDIT SUKISU_KPM_X86_64_FEATURE_UNLOAD_GATE SUKISU_KPM_X86_64_FEATURE_SYSCALL_WRAP; do
   if ! grep -Fq "$token" "$header"; then
     echo "$header does not expose $token" >&2
     exit 1
@@ -44,6 +44,11 @@ done
 
 if ! grep -Fq "ksud kpm audit --json" docs/KPM_X86_64_ABI.md; then
   echo "docs/KPM_X86_64_ABI.md does not document kpm audit" >&2
+  exit 1
+fi
+
+if ! grep -Fq "hook_syscalln" docs/KPM_X86_64_ABI.md; then
+  echo "docs/KPM_X86_64_ABI.md does not document syscall wrapping" >&2
   exit 1
 fi
 

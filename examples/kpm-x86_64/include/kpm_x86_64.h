@@ -10,6 +10,34 @@ typedef long (*kpm_exit_t)(void *reserved);
 typedef long (*kpm_ctl0_t)(const char *args, char *out_msg, int outlen);
 typedef long (*kpm_ctl1_t)(void *a1, void *a2, void *a3);
 
+struct kpm_hook_local {
+	unsigned long data[8];
+};
+
+struct kpm_hook_fargs12 {
+	void *chain;
+	int skip_origin;
+	struct kpm_hook_local local;
+	unsigned long ret;
+	union {
+		struct {
+			unsigned long arg0;
+			unsigned long arg1;
+			unsigned long arg2;
+			unsigned long arg3;
+			unsigned long arg4;
+			unsigned long arg5;
+			unsigned long arg6;
+			unsigned long arg7;
+			unsigned long arg8;
+			unsigned long arg9;
+			unsigned long arg10;
+			unsigned long arg11;
+		};
+		unsigned long args[12];
+	};
+};
+
 #define KPM_INFO(_name, _version, _license, _author, _description) \
 	static const char __kpm_info[] KPM_SECTION(".kpm.info") = \
 		"name=" _name "\0" \

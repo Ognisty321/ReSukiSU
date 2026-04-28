@@ -26,7 +26,7 @@ cleanup_all() {
 }
 
 adb_shell() {
-	"$ADB" shell "$@"
+	"$ADB" -s "$ADB_TARGET" shell "$@"
 }
 
 adb_su() {
@@ -44,7 +44,7 @@ push_kpm() {
 	fi
 
 	adb_su "mkdir -p '$REMOTE_DIR' && chmod 700 '$REMOTE_DIR'"
-	"$ADB" push "$local_file" "$tmp_file" >/dev/null
+	"$ADB" -s "$ADB_TARGET" push "$local_file" "$tmp_file" >/dev/null
 	adb_su "cp '$tmp_file' '$REMOTE_DIR/$name.kpm' && chmod 600 '$REMOTE_DIR/$name.kpm'"
 }
 
@@ -62,7 +62,7 @@ require_kpm_ksud() {
 cleanup_known_modules() {
 	local name
 
-	for name in control_owner control_kpm hotpatch fp_hook inline_hook failure_cases hello_kpm_x86_64; do
+	for name in control_owner control_kpm hotpatch fp_hook inline_hook syscall_wrap failure_cases hello_kpm_x86_64; do
 		if [ "$name" = "control_owner" ]; then
 			adb_su "$KSUD kpm control '$name' cleanup" >/dev/null 2>&1 || true
 		fi
@@ -88,11 +88,13 @@ load_unload() {
 
 log "connecting to $ADB_TARGET"
 "$ADB" connect "$ADB_TARGET" >/dev/null || true
-"$ADB" wait-for-device
+"$ADB" -s "$ADB_TARGET" wait-for-device
 
 require_kpm_ksud
 log "doctor"
 adb_su "$KSUD kpm doctor --json"
+log "autoload status"
+adb_su "$KSUD kpm autoload-status --json"
 cleanup_known_modules
 trap cleanup_all EXIT
 DMESG_START_LINE="$(adb_su "dmesg | wc -l" | tr -dc '0-9')"
@@ -103,6 +105,18 @@ load_unload inline_hook
 push_kpm fp_hook
 load_unload fp_hook
 
+push_kpm syscall_wrap
+log "load syscall_wrap"
+adb_su "$KSUD kpm load '$REMOTE_DIR/syscall_wrap.kpm'"
+log "trigger getpid syscall"
+adb_shell "sh -c 'echo $$ >/dev/null'" >/dev/null
+syscall_hits="$(adb_su "$KSUD kpm control syscall_wrap after" | tr -dc '0-9')"
+printf '%s\n' "$syscall_hits"
+if [ -z "$syscall_hits" ] || [ "$syscall_hits" = "0" ]; then
+	log "expected syscall_wrap after counter to increase"
+	exit 1
+fi
+adb_su "$KSUD kpm unload syscall_wrap"
 push_kpm hotpatch
 load_unload hotpatch
 
@@ -147,6 +161,10 @@ if adb_su "$KSUD kpm info control_kpm" >/dev/null 2>&1; then
 	adb_su "$KSUD kpm unload control_kpm"
 fi
 
+log "cleanup before empty autoload check"
+cleanup_known_modules
+log "autoload-now after cleanup"
+adb_su "$KSUD kpm autoload-now"
 log "final audit"
 adb_su "$KSUD kpm audit --json"
 final_num="$(adb_su "$KSUD kpm num" | tr -dc '0-9')"

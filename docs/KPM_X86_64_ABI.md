@@ -7,7 +7,7 @@ The single source of truth for the loader identity is [`kernel/kpm/kpm_loader_x8
 | Field | Value |
 | --- | --- |
 | Loader name | `ReSukiSU-x86_64-KPM-loader` |
-| Loader version | `ReSukiSU-x86_64-KPM-loader/0.20` |
+| Loader version | `ReSukiSU-x86_64-KPM-loader/0.21` |
 | ABI version | `1` |
 
 ## Module Format
@@ -115,6 +115,7 @@ Feature bit assignments:
 | 9 | `SUKISU_KPM_X86_64_FEATURE_HOOK_TARGET_GUARDS` | ftrace/kprobes/alternatives/jump-label/static-call guards |
 | 10 | `SUKISU_KPM_X86_64_FEATURE_AUDIT` | Kernel/userspace audit reporting |
 | 11 | `SUKISU_KPM_X86_64_FEATURE_UNLOAD_GATE` | Unload is refused while owned hooks or callbacks remain active |
+| 12 | `SUKISU_KPM_X86_64_FEATURE_SYSCALL_WRAP` | Native x86_64 syscall-table wrappers |
 
 ## Userspace Capability Handshake
 
@@ -162,12 +163,27 @@ Inline hook install return codes:
 | `4087` | Memory permission transition failed. |
 | `4086` | Replacement function is outside allowed executable text. |
 
+## Syscall Wrapper ABI
+
+The x86_64 loader exports `has_syscall_wrapper = 1` and supports native syscall wrapping through these compatibility symbols:
+
+1. `hook_syscalln(int nr, int narg, void *before, void *after, void *udata)`
+2. `unhook_syscalln(int nr, void *before, void *after)`
+3. `fp_wrap_syscalln(int nr, int narg, int is_compat, void *before, void *after, void *udata)`
+4. `fp_unwrap_syscalln(int nr, int is_compat, void *before, void *after)`
+5. `inline_wrap_syscalln(int nr, int narg, int is_compat, void *before, void *after, void *udata)`
+6. `inline_unwrap_syscalln(int nr, int is_compat, void *before, void *after)`
+
+Native wrappers patch `sys_call_table[nr]` to a generated stub. Callback frames use `struct kpm_hook_fargs12`; syscall args are unpacked as `di`, `si`, `dx`, `r10`, `r8`, `r9`. A `before` callback may edit `args[0..5]` before the original syscall runs. Setting `skip_origin` skips the original call. `after` callbacks may replace `ret`. `narg` must be `0..6`.
+
+Compat syscall wrappers are not implemented on WSA x86_64 and return `-EOPNOTSUPP`.
+
 ## Userspace Diagnostics
 
 `ksud kpm version` returns the compatibility string expected by Manager:
 
 ```text
-ReSukiSU-x86_64-KPM-loader/0.20
+ReSukiSU-x86_64-KPM-loader/0.21
 ```
 
 Structured diagnostics are available through:
@@ -181,7 +197,7 @@ ksud kpm audit
 ksud kpm audit --json
 ```
 
-`doctor` reports loader reachability, loaded module count, safe mode state, autoload disable state and `/data/adb/kpm` hardening status.
+`doctor` reports loader reachability, loaded module count, safe mode state, autoload disable state and `/data/adb/kpm` hardening status. Autoload-specific status and controls are available through `ksud kpm autoload-status`, `autoload-disable`, `autoload-enable` and `autoload-now`.
 
 `audit` reports loader feature metadata, loaded modules, source paths, SHA256 hashes for readable module files, active hook/callback counters and active hook records. The loader tags hooks installed from a module's `init`, `control` or `exit` context and refuses unload if `.kpm.exit` returns success but owned hooks or callback chain items are still present.
 

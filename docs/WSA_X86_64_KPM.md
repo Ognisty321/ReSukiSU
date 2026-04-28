@@ -23,10 +23,11 @@ Implemented:
 11. Userspace capability handshake through `KSU_KPM_CAPS`.
 12. Buildable x86_64 KPM SDK examples and ELF fuzz smoke CI.
 13. `ksud kpm audit` reporting with module source paths, SHA256 hashes where userspace can read the module file, hook counters and unload gate state.
+14. Native x86_64 syscall wrapping through `hook_syscalln`, `fp_wrap_syscalln` and `inline_wrap_syscalln` by replacing `sys_call_table` slots with generated wrapper stubs.
 
 Not implemented in this release:
 
-1. Direct syscall hook install. Wrappers exist for compatibility but install calls return `EOPNOTSUPP`.
+1. Compat syscall-table wrapping. Compat syscall install calls return `EOPNOTSUPP`.
 2. ARM64 branch helper APIs (`branch_from_to`, `branch_relative`, `branch_absolute`, `ret_absolute`).
 3. ARM64 `kpimg` style boot time patching of the kernel image.
 
@@ -49,7 +50,7 @@ Not implemented in this release:
 
 The formal ABI contract is defined in [KPM_X86_64_ABI.md](KPM_X86_64_ABI.md). This section is a short operational summary.
 
-Current loader marker: `ReSukiSU-x86_64-KPM-loader/0.20`.
+Current loader marker: `ReSukiSU-x86_64-KPM-loader/0.21`.
 
 KPM modules are x86_64 `ET_REL` ELF objects with these sections:
 
@@ -93,6 +94,12 @@ Address validation:
 2. Replacement functions must be normal kernel text or text owned by the currently executing KPM module. Generated wrapper stubs are accepted only through the internal `hook_wrap` path.
 3. Function pointer hooks still validate the pointer slot as a writable kernel address, but their replacement target must satisfy the executable-address rule above.
 
+## Syscall Wrapping
+
+`hook_syscalln(nr, narg, before, after, udata)` installs a wrapper for a native x86_64 syscall number. The generated stub receives the kernel `pt_regs` pointer, unpacks arguments from `di`, `si`, `dx`, `r10`, `r8` and `r9`, lets `before` callbacks inspect or modify them, calls the original syscall table entry unless `skip_origin` is set, then lets `after` callbacks inspect or replace `ret`. `narg` is capped at six for syscalls. The wrapper is owned by the loading KPM module and is covered by the same unload gate and audit accounting as normal hook wrappers.
+
+Compat syscall helpers remain intentionally unsupported on this WSA build and return `EOPNOTSUPP`.
+
 ## Safety Semantics
 
 1. `hotpatch(addrs, values, cnt)` now uses a prepare / commit / rollback model. The loader snapshots all original 32 bit values before patching. If any commit step fails, previously written values are restored and rollback failures are logged with the failing address.
@@ -133,7 +140,7 @@ ksud kpm audit --json
 `doctor` reports loader reachability, loaded module count, safe mode state and the `/data/adb/kpm` directory mode. The expected mode is `700`; the boot-time loader path creates or repairs that directory and rejects symlinks.
 `audit` reports the loader's hook accounting plus module source paths and SHA256 hashes for readable `.kpm` files.
 
-Boot-time KPM autoload is skipped when `/data/adb/kpm.disabled` exists. If autoload sees one or more module load failures during boot, `ksud` writes that marker so the next boot does not keep retrying the same broken autoload set. Remove the marker after fixing or removing the bad `.kpm` files.
+Boot-time KPM autoload is skipped when `/data/adb/kpm.disabled` exists. If autoload sees one or more module load failures during boot, `ksud` writes that marker so the next boot does not keep retrying the same broken autoload set. Autoload now processes `.kpm` files in deterministic path order and refuses symlink or non-regular `.kpm` entries before handing paths to the kernel loader. Use `ksud kpm autoload-status`, `ksud kpm autoload-disable [reason]`, `ksud kpm autoload-enable` and `ksud kpm autoload-now` to inspect, disable, re-enable or manually run the autoload pass after fixing or removing bad `.kpm` files.
 
 ## SDK Examples
 

@@ -93,6 +93,8 @@ for token in \
 	"Load a KPM module" \
 	"Print KPM Loader version" \
 	"Failed to get kpm audit" \
+	"Print boot-time KPM autoload status" \
+	"Load all .kpm files from the autoload directory now" \
 	"/data/adb/kpm"; do
 	if ! grep -Fq "$token" "$STRINGS_TMP"; then
 		echo "missing KPM userspace token in libksud.so: $token" >&2
