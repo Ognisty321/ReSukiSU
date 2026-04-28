@@ -21,7 +21,7 @@ adb shell su -c "ksud kpm audit --json"
 The expected version string is the kernel loader marker, for example:
 
 ```text
-ReSukiSU-x86_64-KPM-loader/0.20
+ReSukiSU-x86_64-KPM-loader/0.21
 ```
 
 ## Local Packaging Check

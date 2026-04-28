@@ -313,14 +313,17 @@ enum sukisu_kpm_ref_kind {
     SUKISU_KPM_REF_SYSCALL_WRAP,
 };
 
-static void sukisu_kpm_enter_module_context(struct sukisu_kpm_module *mod)
+static int sukisu_kpm_enter_module_context(struct sukisu_kpm_module *mod)
 {
     struct sukisu_kpm_context_frame *frame;
 
+    if (!mod)
+        return -EINVAL;
+
     frame = kzalloc(sizeof(*frame), GFP_KERNEL);
     if (!frame) {
-        pr_err("kpm: failed to allocate module context for %s\n", mod && mod->info.name ? mod->info.name : "<unknown>");
-        return;
+        pr_err("kpm: failed to allocate module context for %s\n", mod->info.name ? mod->info.name : "<unknown>");
+        return -ENOMEM;
     }
 
     frame->task = current;
@@ -329,6 +332,7 @@ static void sukisu_kpm_enter_module_context(struct sukisu_kpm_module *mod)
     mutex_lock(&sukisu_kpm_context_lock);
     list_add(&frame->list, &sukisu_kpm_context_frames);
     mutex_unlock(&sukisu_kpm_context_lock);
+    return 0;
 }
 
 static void sukisu_kpm_exit_module_context(struct sukisu_kpm_module *mod)
@@ -2904,14 +2908,17 @@ static int sukisu_kpm_load_module(const void *data, unsigned long len, const cha
     if (rc)
         goto free_mod;
 
-    sukisu_kpm_enter_module_context(mod);
+    rc = sukisu_kpm_enter_module_context(mod);
+    if (rc)
+        goto free_mod;
     init_rc = (*mod->init)(mod->args ? mod->args : "", event, reserved);
     sukisu_kpm_exit_module_context(mod);
     if (init_rc) {
         rc = init_rc < 0 ? (int)init_rc : -EINVAL;
-        sukisu_kpm_enter_module_context(mod);
-        (*mod->exit)(reserved);
-        sukisu_kpm_exit_module_context(mod);
+        if (!sukisu_kpm_enter_module_context(mod)) {
+            (*mod->exit)(reserved);
+            sukisu_kpm_exit_module_context(mod);
+        }
         if (sukisu_kpm_keep_failed_module_if_busy(mod, "init failure", rc))
             return -EBUSY;
         goto free_mod;
@@ -2920,9 +2927,10 @@ static int sukisu_kpm_load_module(const void *data, unsigned long len, const cha
     mutex_lock(&sukisu_kpm_module_lock);
     if (sukisu_kpm_find_module_locked(mod->info.name)) {
         mutex_unlock(&sukisu_kpm_module_lock);
-        sukisu_kpm_enter_module_context(mod);
-        (*mod->exit)(reserved);
-        sukisu_kpm_exit_module_context(mod);
+        if (!sukisu_kpm_enter_module_context(mod)) {
+            (*mod->exit)(reserved);
+            sukisu_kpm_exit_module_context(mod);
+        }
         if (sukisu_kpm_keep_failed_module_if_busy(mod, "duplicate registration", -EEXIST))
             return -EBUSY;
         goto free_mod;
@@ -3005,7 +3013,13 @@ int sukisu_kpm_loader_unload_module(const char *name, void __user *reserved)
     mod->unloading = true;
     mutex_unlock(&sukisu_kpm_module_lock);
 
-    sukisu_kpm_enter_module_context(mod);
+    rc = sukisu_kpm_enter_module_context(mod);
+    if (rc) {
+        mutex_lock(&sukisu_kpm_module_lock);
+        mod->unloading = false;
+        mutex_unlock(&sukisu_kpm_module_lock);
+        return rc;
+    }
     rc = (*mod->exit)(reserved);
     sukisu_kpm_exit_module_context(mod);
     if (rc) {
@@ -3160,7 +3174,11 @@ int sukisu_kpm_loader_control(const char *name, const char *args)
         return -ENOMEM;
     }
 
-    sukisu_kpm_enter_module_context(mod);
+    rc = sukisu_kpm_enter_module_context(mod);
+    if (rc) {
+        mutex_unlock(&sukisu_kpm_module_lock);
+        return rc;
+    }
     rc = (*mod->ctl0)(mod->ctl_args, NULL, 0);
     sukisu_kpm_exit_module_context(mod);
     mutex_unlock(&sukisu_kpm_module_lock);
