@@ -12,7 +12,7 @@ Implemented:
 
 1. Android x86_64 `ksud kpm` command path.
 2. x86_64 `ET_REL` KPM ELF loader with header / section / string / relocation / entry point bounds checks.
-3. x86_64 RELA relocation handling for `R_X86_64_64`, `R_X86_64_PC32`, `R_X86_64_PLT32`, `R_X86_64_32`, `R_X86_64_32S`, `R_X86_64_GOTPCREL`, `R_X86_64_GOTPCRELX`, `R_X86_64_REX_GOTPCRELX`.
+3. x86_64 RELA relocation handling for `R_X86_64_64`, `R_X86_64_PC32`, `R_X86_64_PLT32`, `R_X86_64_PC64`, `R_X86_64_32`, `R_X86_64_32S`, `R_X86_64_GOTPCREL`, `R_X86_64_GOTPCRELX`, `R_X86_64_REX_GOTPCRELX`.
 4. KernelPatch style compatibility symbols: `kpver`, `kver`, `kp_malloc`, `kp_free`, `compat_copy_to_user`, `symbol_lookup_name`, `hotpatch`, `hook`, `hook_wrap`, `fp_hook`, `fp_hook_wrap`.
 5. x86_64 inline hook backend that uses the kernel `insn` decoder for length and RIP relative fixup.
 6. `text_poke_bp()` based install and restore for normal `JMP rel32` hooks under `text_mutex`.
@@ -63,13 +63,13 @@ KPM modules are x86_64 `ET_REL` ELF objects with these sections:
 Lifecycle:
 
 ```text
-load   -> kpm_init(args, "load", reserved)
+load   -> kpm_init(args, "load-file", reserved)
 ctl    -> kpm_ctl0(ctl_args, out_msg, outlen)
 ctl    -> kpm_ctl1(a1, a2, a3)
 unload -> kpm_exit(reserved)
 ```
 
-The loader exports `kpm_loader_abi_version`, `kpm_abi_version`, `kpm_loader_feature_bits` and `kpm_feature_bits` as compatibility symbols so modules can check the runtime contract before using optional APIs. Userspace can read the same contract through `KSU_KPM_CAPS`, which is used by `ksud kpm doctor --json`.
+The loader exports `kpm_loader_abi_version`, `kpm_abi_version`, `kpm_loader_feature_bits` and `kpm_feature_bits` as compatibility symbols so modules can check the runtime contract before using optional APIs. Userspace can read the same contract through `KSU_KPM_CAPS`, which is used by `ksud kpm doctor --json`. The load event string is `load-file`; modules should not rely on the older documentation-only `load` spelling.
 
 ## Hook Backend
 
