@@ -110,7 +110,7 @@ Feature bit assignments:
 | 4 | `SUKISU_KPM_X86_64_FEATURE_FP_HOOK` | Function pointer hook API |
 | 5 | `SUKISU_KPM_X86_64_FEATURE_HOTPATCH` | Hotpatch API with rollback on commit failure |
 | 6 | `SUKISU_KPM_X86_64_FEATURE_ROX_ALLOC` | Generated executable memory transitions to ROX |
-| 7 | `SUKISU_KPM_X86_64_FEATURE_RCU_EXEC_FREE` | RCU task synchronization before executable memory free |
+| 7 | `SUKISU_KPM_X86_64_FEATURE_RCU_EXEC_FREE` | RCU task synchronization before executable memory free; free is refused if the final `RW+NX` transition fails |
 | 8 | `SUKISU_KPM_X86_64_FEATURE_TEXT_POKE_BP` | `text_poke_bp` inline hook install/restore path |
 | 9 | `SUKISU_KPM_X86_64_FEATURE_HOOK_TARGET_GUARDS` | ftrace/kprobes/alternatives/jump-label/static-call guards |
 | 10 | `SUKISU_KPM_X86_64_FEATURE_AUDIT` | Kernel/userspace audit reporting |

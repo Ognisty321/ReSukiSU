@@ -448,13 +448,18 @@ static int sukisu_kpm_set_exec_rox(void *ptr, size_t size)
         return -EINVAL;
 
     rc = set_memory_nx(start, pages);
-    if (rc)
+    if (rc) {
+        pr_err("kpm: set_memory_nx before ROX failed for %px size=%zu rc=%d\n", ptr, size, rc);
         return rc;
+    }
     rc = set_memory_ro(start, pages);
-    if (rc)
+    if (rc) {
+        pr_err("kpm: set_memory_ro failed for %px size=%zu rc=%d\n", ptr, size, rc);
         return rc;
+    }
     rc = set_memory_x(start, pages);
     if (rc) {
+        pr_err("kpm: set_memory_x failed for %px size=%zu rc=%d\n", ptr, size, rc);
         set_memory_rw(start, pages);
         set_memory_nx(start, pages);
         return rc;
@@ -493,14 +498,24 @@ static void sukisu_kpm_sync_before_exec_free(void)
     synchronize_rcu_tasks();
 }
 
-static void sukisu_kpm_free_generated_exec(void *ptr, size_t size, bool sync)
+static int sukisu_kpm_free_generated_exec(void *ptr, size_t size, bool sync)
 {
+    int rc;
+
     if (!ptr)
-        return;
+        return 0;
     if (sync)
         sukisu_kpm_sync_before_exec_free();
-    sukisu_kpm_set_exec_rw_nx(ptr, size);
+
+    rc = sukisu_kpm_set_exec_rw_nx(ptr, size);
+    if (rc) {
+        pr_err("kpm: refusing to free generated exec buffer %px size=%zu after permission transition failure: %d\n",
+               ptr, size, rc);
+        return rc;
+    }
+
     module_memfree(ptr);
+    return 0;
 }
 
 static int __must_check sukisu_kpm_compat_copy_to_user(void __user *to, const void *from, int n)
@@ -1182,14 +1197,13 @@ static void *sukisu_kpm_make_wrap_stub(void *chain, int argno, void *dispatcher)
     sukisu_kpm_emit1(&p, 0xc3);
 
     if (p - stub > SUKISU_KPM_X86_WRAP_STUB_SIZE) {
-        module_memfree(stub);
+        sukisu_kpm_free_generated_exec(stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
         return NULL;
     }
 
     rc = sukisu_kpm_set_exec_rox(stub, SUKISU_KPM_X86_WRAP_STUB_SIZE);
     if (rc) {
-        sukisu_kpm_set_exec_rw_nx(stub, SUKISU_KPM_X86_WRAP_STUB_SIZE);
-        module_memfree(stub);
+        sukisu_kpm_free_generated_exec(stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
         return NULL;
     }
     return stub;
@@ -1460,14 +1474,13 @@ static void *sukisu_kpm_make_syscall_wrap_stub(struct sukisu_kpm_syscall_wrap_ch
     sukisu_kpm_emit1(&p, 0xc3);
 
     if (p - stub > SUKISU_KPM_X86_WRAP_STUB_SIZE) {
-        module_memfree(stub);
+        sukisu_kpm_free_generated_exec(stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
         return NULL;
     }
 
     rc = sukisu_kpm_set_exec_rox(stub, SUKISU_KPM_X86_WRAP_STUB_SIZE);
     if (rc) {
-        sukisu_kpm_set_exec_rw_nx(stub, SUKISU_KPM_X86_WRAP_STUB_SIZE);
-        module_memfree(stub);
+        sukisu_kpm_free_generated_exec(stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
         return NULL;
     }
     return stub;

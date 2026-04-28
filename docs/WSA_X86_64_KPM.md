@@ -17,7 +17,7 @@ Implemented:
 5. x86_64 inline hook backend that uses the kernel `insn` decoder for length and RIP relative fixup.
 6. `text_poke_bp()` based install and restore for normal `JMP rel32` hooks under `text_mutex`.
 7. `RW+NX` to `ROX` page transitions for trampolines and wrapper stubs.
-8. `synchronize_rcu_tasks_rude()` plus `synchronize_rcu_tasks()` before generated executable buffers are freed.
+8. `synchronize_rcu_tasks_rude()` plus `synchronize_rcu_tasks()` before generated executable buffers are freed, with free refused if the final `RW+NX` permission transition fails.
 9. Refusal of unsafe or conflicting hook targets owned by ftrace, kprobes, alternatives, jump labels or static calls.
 10. Refusal of patching from IRQ or atomic context.
 11. Userspace capability handshake through `KSU_KPM_CAPS`.
@@ -85,6 +85,7 @@ Restore:
 1. The patcher acquires `text_mutex`.
 2. `text_poke_bp()` writes the original prologue bytes back. The breakpoint emulation step uses the previous jump bytes so any in flight CPU continues into the trampoline rather than into a half restored prologue.
 3. `synchronize_rcu_tasks_rude()` and `synchronize_rcu_tasks()` are called before the trampoline pages are freed, so no task can still be running inside them.
+4. Before `module_memfree()`, generated executable buffers are switched back to `RW+NX`. If that transition fails, the loader logs the failure and keeps the allocation resident instead of freeing pages with stale executable permissions.
 
 Far jump fallback: when the trampoline cannot be reached with a 5 byte `JMP rel32`, the install path falls back to a 14 byte absolute jump emitted by the existing ReSukiSU x86_64 text writer.
 
@@ -107,6 +108,7 @@ Compat syscall helpers remain intentionally unsupported on this WSA build and re
 3. If `.kpm.exit` returns an error, the module stays loaded instead of freeing executable memory that may still be referenced by hooks or callbacks.
 4. Hooks installed from a KPM `init`, `control` or `exit` context are tagged to that module. Unload is refused after `.kpm.exit` if owned inline hooks, function pointer hooks, wrapper chain items or active callbacks remain.
 5. Module ownership context is tracked per task and as a stack, so overlapping callbacks from different tasks cannot overwrite each other's current owner.
+6. Generated executable memory free is fail-closed: a failed `RW+NX` transition is treated as a hard cleanup error and the buffer is intentionally retained for diagnosis.
 
 ## KPM Build Flags
 
