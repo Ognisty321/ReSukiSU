@@ -989,7 +989,7 @@ pub fn run() -> Result<()> {
                 Kpm::AutoloadEnable => kpm::autoload_enable(),
                 Kpm::AutoloadNow => kpm::autoload_now(),
             }
-        },
+        }
         Commands::Initrc { command } => match command {
             Initrc::Refresh => regenerate_preinit_rc(),
         },
