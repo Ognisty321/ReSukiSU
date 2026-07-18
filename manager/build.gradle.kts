@@ -15,6 +15,15 @@ val managerVersionCode by extra(30000 + getGitCommitCount() + 700)
 val managerVersionName by extra(getGitDescribe())
 
 fun getGitCommitCount(): Int {
+    val isShallow = providers.exec {
+        commandLine("git", "rev-parse", "--is-shallow-repository")
+    }.standardOutput.asText.get().trim().toBoolean()
+
+    check(!isShallow) {
+        "Shallow ReSukiSU history cannot produce a valid version code. " +
+            "Run: git fetch --unshallow --tags"
+    }
+
     return providers.exec {
         commandLine("git", "rev-list", "--count", "HEAD")
     }.standardOutput.asText.get().trim().toInt()
