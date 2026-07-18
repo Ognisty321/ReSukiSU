@@ -10,8 +10,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 
-use crate::android::ksucalls::ksuctl;
-use crate::ksu_uapi;
+use crate::android::{ksucalls::ksuctl, uapi};
 
 const KPM_DIR: &str = "/data/adb/kpm";
 const KPM_DISABLE_FILE: &str = "/data/adb/kpm.disabled";
@@ -49,14 +48,14 @@ fn ensure_kpm_ret(action: &str, ret: i32) -> Result<()> {
 
 fn run_kpm_cmd(control_code: u8, arg1: u64, arg2: u64) -> Result<i32> {
     let mut ret = -1;
-    let mut cmd = ksu_uapi::ksu_kpm_cmd {
+    let mut cmd = uapi::ksu_kpm_cmd {
         control_code,
         arg1,
         arg2,
         result_code: &raw mut ret as u64,
     };
 
-    ksuctl(ksu_uapi::KSU_IOCTL_KPM_RUST, &raw mut cmd)?;
+    ksuctl(uapi::KSU_IOCTL_KPM_RUST, &raw mut cmd)?;
     Ok(ret)
 }
 
@@ -68,7 +67,7 @@ where
     let args = args.map_or_else(|| CString::new(String::new()), CString::new)?;
 
     let ret = run_kpm_cmd(
-        ksu_uapi::KSU_KPM_LOAD_RUST,
+        uapi::KSU_KPM_LOAD_RUST,
         path.as_ptr() as u64,
         args.as_ptr() as u64,
     )?;
@@ -79,7 +78,7 @@ fn list_modules_string() -> Result<String> {
     let mut buf = vec![0u8; 1024];
 
     let ret = run_kpm_cmd(
-        ksu_uapi::KSU_KPM_LIST_RUST,
+        uapi::KSU_KPM_LIST_RUST,
         buf.as_mut_ptr() as u64,
         buf.len() as u64,
     )?;
@@ -106,7 +105,7 @@ pub fn list(json_output: bool) -> Result<()> {
 pub fn unload_module(name: String) -> Result<()> {
     let name = CString::new(name)?;
 
-    let ret = run_kpm_cmd(ksu_uapi::KSU_KPM_UNLOAD_RUST, name.as_ptr() as u64, 0)?;
+    let ret = run_kpm_cmd(uapi::KSU_KPM_UNLOAD_RUST, name.as_ptr() as u64, 0)?;
     ensure_kpm_ret("Failed to unload kpm", ret)
 }
 
@@ -121,7 +120,7 @@ fn info_string(name: &str) -> Result<String> {
     let mut buf = vec![0u8; 1024];
 
     let ret = run_kpm_cmd(
-        ksu_uapi::KSU_KPM_INFO_RUST,
+        uapi::KSU_KPM_INFO_RUST,
         name.as_ptr() as u64,
         buf.as_mut_ptr() as u64,
     )?;
@@ -135,7 +134,7 @@ pub fn control(name: String, args: String) -> Result<i32> {
     let args = CString::new(args)?;
 
     let ret = run_kpm_cmd(
-        ksu_uapi::KSU_KPM_CONTROL_RUST,
+        uapi::KSU_KPM_CONTROL_RUST,
         name.as_ptr() as u64,
         args.as_ptr() as u64,
     )?;
@@ -145,18 +144,18 @@ pub fn control(name: String, args: String) -> Result<i32> {
 }
 
 fn num_value() -> Result<i32> {
-    let ret = run_kpm_cmd(ksu_uapi::KSU_KPM_NUM_RUST, 0, 0)?;
+    let ret = run_kpm_cmd(uapi::KSU_KPM_NUM_RUST, 0, 0)?;
     ensure_kpm_ret("Failed to get kpm num", ret)?;
     Ok(ret)
 }
 
 fn caps_value() -> Result<KpmCaps> {
-    let mut caps: ksu_uapi::ksu_kpm_caps = unsafe { zeroed() };
+    let mut caps: uapi::ksu_kpm_caps = unsafe { zeroed() };
 
     let ret = run_kpm_cmd(
-        ksu_uapi::KSU_KPM_CAPS_RUST,
+        uapi::KSU_KPM_CAPS_RUST,
         &raw mut caps as u64,
-        size_of::<ksu_uapi::ksu_kpm_caps>() as u64,
+        size_of::<uapi::ksu_kpm_caps>() as u64,
     )?;
     ensure_kpm_ret("Failed to get kpm caps", ret)?;
 
@@ -179,7 +178,7 @@ fn audit_string() -> Result<String> {
     let mut buf = vec![0u8; 8192];
 
     let ret = run_kpm_cmd(
-        ksu_uapi::KSU_KPM_AUDIT_RUST,
+        uapi::KSU_KPM_AUDIT_RUST,
         buf.as_mut_ptr() as u64,
         buf.len() as u64,
     )?;
@@ -198,7 +197,7 @@ fn version_string() -> Result<String> {
     let mut buf = vec![0u8; 1024];
 
     let ret = run_kpm_cmd(
-        ksu_uapi::KSU_KPM_VERSION_RUST,
+        uapi::KSU_KPM_VERSION_RUST,
         buf.as_mut_ptr() as u64,
         buf.len() as u64,
     )?;

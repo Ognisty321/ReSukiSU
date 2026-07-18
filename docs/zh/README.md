@@ -7,27 +7,34 @@
 一个 [`SukiSU-Ultra/SukiSU-Ultra`](https://github.com/SukiSU-Ultra/SukiSU-Ultra) 的下游分支,添加了一些有趣的变更，且更加稳定。
 
 [![最新发行](https://img.shields.io/github/v/release/ReSukiSU/ReSukiSU?label=Release&logo=github)](https://github.com/ReSukiSU/ReSukiSU/releases/latest)
+[![最新 CI 构建（nightly.link）](https://img.shields.io/badge/nightly.link-%E6%9C%80%E6%96%B0%20CI%20%E6%9E%84%E5%BB%BA-800080)](https://nightly.link/ReSukiSU/ReSukiSU/workflows/build-manager/main)
 [![频道](https://img.shields.io/badge/Follow-Telegram-blue.svg?logo=telegram)](https://t.me/ReSukiSU)
-[![协议: GPL v2](https://img.shields.io/badge/License-GPL%20v2-orange.svg?logo=gnu)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
-[![GitHub 协议](https://img.shields.io/github/license/tiann/KernelSU?logo=gnu)](/LICENSE)
+[![Kernel License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-orange.svg?logo=gnu)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
+[![其他部分 License：GPL v3](https://img.shields.io/github/license/ReSukiSU/ReSukiSU?logo=gnu)](/LICENSE)
 
 ## 特性
 
 1. 基于内核的 `su` 和权限管理。
-2. 基于 [Magic Mount](https://github.com/5ec1cff/KernelSU) 的模块系统。
-   > **注意：** 模块挂载已由元模块接管，不再支持
+2. 基于 [metamodules](https://kernelsu.org/zh_CN/guide/metamodule.html) 的模块系统：可插拔的模块架构。
 3. [App Profile](https://kernelsu.org/zh_CN/guide/app-profile.html): 把 Root 权限关进笼子里。
 4. 支持 non-GKI 与 GKI 1.0。
-5. KPM 支持
-6. 可调整管理器外观，可自定义 susfs 配置。
+5. 可调整管理器外观，可自定义 susfs 配置。
+6. 多管理器支持，默认支持使用 [官方KernelSU](https://github.com/tiann/KernelSU)/[RKSU](https://github.com/rsuntk/KernelSU)/[MKSU](https://github.com/5ec1cff/KernelSU)/[SukiSU](https://github.com/SukiSU-Ultra/SukiSU-Ultra) 作为管理器与 ReSukiSU 内核共同工作
 
 ## 兼容状态
 
 - ReSukiSU 官方支持 GKI 2.0 的设备（内核版本 5.10 以上）。
 
-- 旧内核也是兼容的（最低 3.4+），不过需要自己编译内核。
+- 旧内核也是兼容的（3.4+），不过需要自己编译内核。
 
-- 目前支持架构 : `arm64-v8a`、`armeabi-v7a`、`X86_64`。
+- 目前支持架构 : `arm64-v8a`、`armeabi-v7a`、`x86_64`。
+
+- `Tracepoint Syscall Redirect Hook` 只支持在 GKI2 内核(5.10+) 工作
+
+## Hook 模式
+- `Tracepoint Syscall Redirect hook` 默认模式, 来自于 [上游](https://github.com/tiann/KernelSU), 但是只支持 GKI2 内核且为 `arm64-v8a` 或 `x86_64` 架构
+- `Manual Hook` 兼容性最强的钩子，支持 Linux Kernel 3.4 - Linux Kernel 6.18
+- `SuSFS Inline Hook` 一个来自 [SuSFS](https://github.com/simonpunk/susfs4ksu) 的 Hook, 类似于 `Manual Hook`, 但是由 `SuSFS` 项目，而非本项目
 
 ## 集成
 
@@ -36,21 +43,6 @@
 ## 参与翻译
 
 要将 ReSukiSU 翻译成您的语言，或完善现有的翻译，请使用 [Crowdin](https://crowdin.com/project/ReSukiSU).
-
-## KPM 支持
-
-- 基于 KernelPatch 开发，移除了与 KernelSU 重复的功能。
-- 正在进行（WIP）：通过集成附加功能来扩展 APatch 兼容性，以确保跨不同实现的兼容性。
-
-**开源仓库**: [https://github.com/ShirkNeko/SukiSU_KernelPatch_patch](https://github.com/ShirkNeko/SukiSU_KernelPatch_patch)
-
-**KPM 模板**: [https://github.com/udochina/KPM-Build-Anywhere](https://github.com/udochina/KPM-Build-Anywhere)
-
-> [!Note]
->
-> 1. 需要 `CONFIG_KPM=y`
-> 2. Non-GKI 设备需要 `CONFIG_KALLSYMS=y` and `CONFIG_KALLSYMS_ALL=y`
-> 3. 对于低于 `4.19` 的内核，需要从 `4.19` 的 `set_memory.h` 进行反向移植。
 
 ## 许可证
 

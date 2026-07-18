@@ -3,7 +3,6 @@ name: Build Manager
 on:
   workflow_dispatch:
   push:
-    branches: [ "main", "dev", "ci" ]
     paths:
       - '.github/workflows/build-manager.yml'
       - '.github/workflows/build-lkm.yml'
@@ -14,16 +13,6 @@ on:
       - 'userspace/**'
       - 'scripts/ksubot.py'
   pull_request:
-    branches: [ "main", "dev" ]
-    paths:
-      - '.github/workflows/build-manager.yml'
-      - '.github/workflows/build-lkm.yml'
-      - '.github/workflows/ddk-lkm.yml'
-      - '.github/workflows/ksud.yml'
-      - 'manager/**'
-      - 'kernel/**'
-      - 'userspace/**'
-      - 'scripts/ksubot.py'
   workflow_call:
 
 jobs:
@@ -130,7 +119,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -212,8 +201,14 @@ jobs:
           name: ${{ steps.determine.outputs.title }}-gradle-${{ matrix.build_type }}
           path: |
             manager/app/build/outputs/apk/release/*.apk
-            manager/app/build/outputs/mapping/release/
             manager/app/build/outputs/apk/debug/*.apk
+
+      - name: Upload mappings
+        uses: actions/upload-artifact@v7
+        with:
+          name: "${{ steps.determine.outputs.title }}-mappings"
+          path: "manager/app/build/outputs/mapping/release/"
+          if-no-files-found: ignore
 
   repack-manager:
     if: always() && needs.build-manager.result == 'success' && needs.build-ksud.result == 'success'
@@ -231,7 +226,7 @@ jobs:
             build_type: "debug"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -290,7 +285,7 @@ jobs:
           cp -f "$X86_64_KSUD" target/x86_64-linux-android/release/ksud
 
       - name: Prepare signing inputs
-        if: ${{ github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/ci')) || github.ref_type == 'tag' }}
+        if: ${{ github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/ci' || github.ref == 'refs/heads/sync-upstream')) || github.ref_type == 'tag' }}
         env:
           PR_KEYSTORE: ${{ needs.generate-key.outputs.keystore }}
           PR_KEYSTORE_PASSWORD: ${{ needs.generate-key.outputs.keystore_password }}
@@ -335,7 +330,7 @@ jobs:
           fi
 
       - name: Repack and resign
-        if: ${{ github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/ci')) || github.ref_type == 'tag' }}
+        if: ${{ github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/ci' || github.ref == 'refs/heads/sync-upstream')) || github.ref_type == 'tag' }}
         run: |
           python3 repack_apk_multi.py repack \
             -b ${{ matrix.build_type }} \
@@ -349,8 +344,13 @@ jobs:
             -S "$SIGN_KEY_PASSWORD" \
             --strip
 
+      - name: Delete gradle build
+        uses: GeekyEggo/delete-artifact@v6
+        with:
+          name: ${{ steps.determine.outputs.title }}-gradle-${{ matrix.build_type }}
+        
       - name: Upload build artifact
-        if: ${{ github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/ci')) || github.ref_type == 'tag' }}
+        if: ${{ github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/ci' || github.ref == 'refs/heads/sync-upstream')) || github.ref_type == 'tag' }}
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.determine.outputs.title }}-${{ matrix.build_type }}
@@ -365,7 +365,7 @@ jobs:
         manager_type: [ "spoofed", "normal" ]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Setup need_upload
@@ -387,6 +387,10 @@ jobs:
             echo "title=Manager" >> $GITHUB_OUTPUT
             echo "topicid=${{ vars.MESSAGE_THREAD_ID }}" >> $GITHUB_OUTPUT
           fi
+
+          if [[ "${{ github.ref }}" != "refs/heads/main" && "${{ github.ref_type }}" != "tag" ]]; then
+            echo "topicid=${{ vars.MESSAGE_DEVELOPING_MANAGER_THREAD_ID }}" >> $GITHUB_OUTPUT
+          fi
         
       - name: Download Debug artifact
         if: ${{ matrix.manager_type != 'spoofed' }}
@@ -407,6 +411,7 @@ jobs:
           CHAT_ID: ${{ vars.CHAT_ID }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           MESSAGE_THREAD_ID: ${{ steps.determine.outputs.topicid }}
+          DEVELOPING_THREAD_ID: ${{ vars.MESSAGE_DEVELOPING_MANAGER_THREAD_ID }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           TITLE: ${{ steps.determine.outputs.title }}
           BRANCH: ${{ github.ref_name }}

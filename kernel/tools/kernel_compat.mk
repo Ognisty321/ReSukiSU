@@ -51,19 +51,25 @@ $(info -- $(REPO_NAME)/compat: put_seccomp_filter found)
 ccflags-y += -DKSU_OPTIONAL_SECCOMP_FILTER_RELEASE
 endif
 
+# https://github.com/torvalds/linux/commit/215b674b84dd052098fe6389e32a5afaff8b4d56
+# 5.12-
 ifeq ($(shell grep -q "security_inode_init_security_anon" $(srctree)/include/linux/security.h; echo $$?),0)
 $(info -- $(REPO_NAME)/compat: security_inode_init_security_anon found)
 ccflags-y += -DKSU_OPTIONAL_HAS_INIT_SEC_ANON
 endif
 
+# https://github.com/torvalds/linux/commit/e7e832ce6fa769f800cd7eaebdb0459ad31e0416
+# 5.12-
 ifeq ($(shell grep -q "anon_inode_getfd_secure" $(srctree)/fs/anon_inodes.c; echo $$?),0)
 $(info -- $(REPO_NAME)/compat: anon_inode_getfd_secure found)
 ccflags-y += -DKSU_HAS_GETFD_SECURE
 endif
 
-ifeq ($(shell grep -A1 "^int vfs_getattr" $(srctree)/fs/stat.c | grep -q "query_flags"; echo $$?),0)
-$(info -- $(REPO_NAME)/compat: vfs_getattr() found)
-ccflags-y += -DKSU_HAS_NEW_VFS_GETATTR
+# https://github.com/torvalds/linux/commit/4f0b9194bc119a9850a99e5e824808e2f468c348
+# 6.8-
+ifeq ($(shell grep -q "anon_inode_create_getfd" $(srctree)/fs/anon_inodes.c; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: anon_inode_create_getfd found)
+ccflags-y += -DKSU_HAS_ANON_INODE_CREATE_FD
 endif
 
 ifeq ($(shell grep -q "static inline struct inode \*file_inode" $(srctree)/include/linux/fs.h; echo $$?),0)
@@ -90,14 +96,8 @@ endif
 ## For Huawei EMUI10+ check  
 # Scan Kernel Tree to find CONFIG_HKIP_SELINUX_PROT in ebitmap.h
 ifeq ($(shell grep -q "CONFIG_HKIP_SELINUX_PROT" $(srctree)/security/selinux/ss/ebitmap.h 2>/dev/null; echo $$?),0)
-  $(info -- $(REPO_NAME): CONFIG_HKIP_SELINUX_PROT found!)
-  ccflags-y += -DKSU_COMPAT_IS_HISI_HM2
-endif
-
-# Function proc_ops check
-ifeq ($(shell grep -q "struct proc_ops " $(srctree)/include/linux/proc_fs.h; echo $$?),0)
-$(info -- $(REPO_NAME)/compat: proc_ops found)
-ccflags-y += -DKSU_COMPAT_HAS_PROC_OPS
+$(info -- $(REPO_NAME): CONFIG_HKIP_SELINUX_PROT found!)
+ccflags-y += -DKSU_COMPAT_IS_HISI_HM2
 endif
 
 # policy mutex
@@ -107,15 +107,9 @@ $(info -- $(REPO_NAME)/compat: policy_mutex found)
 ccflags-y += -DKSU_COMPAT_HAS_POLICY_MUTEX
 endif
 
-# policy rwlock
-# kernel 4.14-
-ifeq ($(shell grep -q "^DEFINE_RWLOCK(policy_rwlock);" $(srctree)/security/selinux/ss/services.c; echo $$?),0)
-$(info -- $(REPO_NAME)/compat: exported policy_rwlock found!)
-ccflags-y += -DKSU_COMPAT_HAS_EXPORTED_POLICY_RWLOCK
-endif
-
 # Function ns_get_path check
 # for kernel 3.19-
+# https://github.com/torvalds/linux/commit/e149ed2b805fefdccf7ccdfc19eca22fdd4514ac
 ifeq ($(shell grep -q "ns_get_path" $(srctree)/fs/nsfs.c; echo $$?),0)
 $(info -- $(REPO_NAME)/compat: ns_get_path found)
 ccflags-y += -DKSU_COMPAT_HAS_NS_GET_PATH
@@ -167,19 +161,6 @@ $(info -- $(REPO_NAME)/compat: d_inode found)
 ccflags-y += -DKSU_HAS_D_INODE
 endif
 
-# The FUCKING Sulog logic require that
-# it need the whole rewrite
-# Introduce in linux kernel 4.8
-ifeq ($(shell grep -q "time64_to_tm" $(srctree)/include/linux/time.h 2>/dev/null; echo $$?),0)
-$(info -- $(REPO_NAME)/compat: time64_to_tm found)
-ccflags-y += -DKSU_HAS_TIME64
-endif
-
-ifeq ($(shell grep -q "ktime_get_ns" $(srctree)/include/linux/timekeeping.h 2>/dev/null; echo $$?),0)
-$(info -- $(REPO_NAME)/compat: ktime_get_ns found)
-ccflags-y += -DKSU_HAS_TIME_HELPER
-endif
-
 # https://github.com/torvalds/linux/commit/5955102c9984fa081b2d570cfac75c97eecf8f3b
 # for setuid_hooks only
 # it will remove when we impl dynamic-manager feature init out of replaceable ksud
@@ -210,7 +191,6 @@ $(info -- $(REPO_NAME)/compat: overflow.h found)
 ccflags-y += -DKSU_COMPAT_HAS_OVERFLOW_H
 endif
 
-
 # for kernel version below 3.14, linux/proc_ns.h maybe not found
 # https://github.com/torvalds/linux/commit/0bb80f240520c4148b623161e7856858c021696d
 ifneq ($(wildcard $(srctree)/include/linux/proc_ns.h),)
@@ -218,9 +198,81 @@ $(info -- $(REPO_NAME)/compat: modern proc ns header file found)
 ccflags-y += -DKSU_HAS_MODERN_PROC_NS
 endif
 
-# Kernel 4.2-
-# have that can avoid scan selinux_ops
-ifeq ($(shell grep -q "^struct security_operations selinux_ops" $(srctree)/security/selinux/hooks.c; echo $$?),0)
-$(info -- $(REPO_NAME)/compat: exported selinux_ops found!)
-CFLAGS_ksu.o += -DKSU_HAS_EXPORTED_SELINUX_OPS
+# Android SPEC Changes
+# https://android-review.googlesource.com/c/kernel/common/+/3009995
+ifeq ($(shell grep -q "POLICYDB_CONFIG_ANDROID_NETLINK_ROUTE" $(srctree)/security/selinux/ss/policydb.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: android spec POLICYDB_CONFIG_ANDROID_NETLINK_ROUTE found!!)
+ccflags-y += -DKSU_COMPAT_HAS_POLICYDB_CONFIG_ANDROID_NETLINK_ROUTE
+endif
+
+ifeq ($(shell grep -q "POLICYDB_CONFIG_ANDROID_NETLINK_GETNEIGH" $(srctree)/security/selinux/ss/policydb.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: android spec POLICYDB_CONFIG_ANDROID_NETLINK_GETNEIGH found!!)
+ccflags-y += -DKSU_COMPAT_HAS_POLICYDB_CONFIG_ANDROID_NETLINK_GETNEIGH
+endif
+
+ifneq ($(shell grep -q "flex_array" $(srctree)/security/selinux/ss/policydb.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found modern selinux policydb)
+ccflags-y += -DKSU_COMPAT_HAS_MODERN_POLICYDB
+endif
+
+ifeq ($(shell grep -q "struct sidtab .sidtab" $(srctree)/security/selinux/ss/services.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found sidtab as reference)
+ccflags-y += -DKSU_COMPAT_SIDTAB_AS_REFERENCE
+endif
+
+ifeq ($(shell grep -q "hlist_head" $(srctree)/include/linux/lsm_hooks.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found hlist in security_hook_list)
+ccflags-y += -DKSU_COMPAT_HLIST_FOR_SECURITY_HOOK_LIST
+endif
+
+ifeq ($(shell grep -F -q "int (*setprocattr)(const char *name, void *value, size_t size);" $(srctree)/include/linux/lsm_hooks.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found new setprocattr prototype)
+ccflags-y += -DKSU_COMPAT_SETPROCATTR_USE_NEW_PROTOTYPE
+endif
+
+ifeq ($(shell grep -F -q "char *lsm_names" $(srctree)/security/security.c; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found required provide lsm name)
+ccflags-y += -DKSU_COMPAT_REQUIRE_PROVIDE_LSM_NAME
+endif
+
+# https://github.com/torvalds/linux/commit/4b36cb773a8153417a080f8025d522322f915aea
+ifeq ($(shell grep -q "struct mutex status_lock" $(srctree)/security/selinux/include/security.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found selinux status variables in selinux_state)
+ccflags-y += -DKSU_COMPAT_SELINUX_STATUS_VAR_IN_SELINUX_STATE
+endif
+
+ifeq ($(shell grep -q "struct selinux_policy" $(srctree)/security/selinux/ss/services.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found selinux_policy struct)
+ccflags-y += -DKSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
+endif
+
+# https://github.com/torvalds/linux/commit/03414a49ad5f3c56988c36d2070e402ffa17feaf
+ifeq ($(shell grep -q "struct hashtab table" $(srctree)/security/selinux/ss/symtab.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found hashtabs is a struct instead of pointer)
+ccflags-y += -DKSU_COMPAT_HAS_NON_POINTER_SYMTAB_STRUCT
+endif
+
+# https://github.com/torvalds/linux/commit/237389e3015e0f4ceac7cf00c70a59746150561d
+ifeq ($(shell grep -q "symtab_search" $(srctree)/security/selinux/ss/symtab.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found symtab_search function)
+ccflags-y += -DKSU_COMPAT_HAS_SYMTAB_SEARCH
+endif
+
+# https://github.com/torvalds/linux/commit/24def7bb92c19337cee26d506f87dc4eeeba7a19
+ifeq ($(shell grep -q "hashtab_key_params" $(srctree)/security/selinux/ss/hashtab.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found hashtab_key_params function)
+ccflags-y += -DKSU_COMPAT_HAS_HASHTAB_KEY_PARAMS
+endif
+
+# https://github.com/torvalds/linux/commit/c3a276111ea2572399281988b3129683e2a6b60b
+ifeq ($(shell grep -q "filename_trans_key" $(srctree)/security/selinux/ss/policydb.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found filename_trans_key function)
+ccflags-y += -DKSU_COMPAT_HAS_FILENAME_TRANS_KEY
+endif
+
+# https://github.com/torvalds/linux/commit/e20b043a6902ecb61c2c84355c3bae5149f391db
+# https://github.com/torvalds/linux/commit/b1d9e6b0646d0e5ee5d9050bd236b6c65d66faef
+ifeq ($(shell grep -q "security_add_hooks" $(srctree)/include/linux/lsm_hooks.h; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: found security_add_hooks)
+ccflags-y += -DKSU_COMPAT_HAS_LIST_OF_LSM_HOOKS
 endif

@@ -16,7 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.twotone.ArrowBack
-import androidx.compose.material.icons.rounded.LocalPolice
+import androidx.compose.material.icons.twotone.LocalPolice
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
@@ -57,8 +57,9 @@ import com.resukisu.resukisu.ui.component.settings.AppBackButton
 import com.resukisu.resukisu.ui.navigation.LocalNavigator
 import com.resukisu.resukisu.ui.theme.CardConfig
 import com.resukisu.resukisu.ui.theme.ThemeConfig
-import com.resukisu.resukisu.ui.theme.haze
-import com.resukisu.resukisu.ui.theme.hazeSource
+import com.resukisu.resukisu.ui.theme.blurEffect
+import com.resukisu.resukisu.ui.theme.blurSource
+import com.resukisu.resukisu.ui.theme.renderBackgroundBlur
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -85,8 +86,7 @@ fun OpenSourceLicenseScreen() {
         contentColor = MaterialTheme.colorScheme.onSurface,
         topBar = {
             LargeFlexibleTopAppBar(
-                modifier = Modifier.haze(
-                    scrollBehavior.state.collapsedFraction
+                modifier = Modifier.blurEffect(
                 ),
                 windowInsets = TopAppBarDefaults.windowInsets.add(WindowInsets(left = 12.dp)),
                 title = { Text(text = stringResource(id = R.string.open_source_license)) },
@@ -103,11 +103,15 @@ fun OpenSourceLicenseScreen() {
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor =
-                        if (ThemeConfig.backgroundImageLoaded) Color.Transparent
-                        else MaterialTheme.colorScheme.surfaceContainer,
+                        if (ThemeConfig.isEnableBlur)
+                            Color.Transparent
+                        else
+                            MaterialTheme.colorScheme.surfaceContainer.copy(CardConfig.cardAlpha),
                     scrolledContainerColor =
-                        if (ThemeConfig.backgroundImageLoaded) Color.Transparent
-                        else MaterialTheme.colorScheme.surfaceContainer,
+                        if (ThemeConfig.isEnableBlur)
+                            Color.Transparent
+                        else
+                            MaterialTheme.colorScheme.surfaceContainer.copy(CardConfig.cardAlpha),
                 ),
             )
         },
@@ -117,14 +121,15 @@ fun OpenSourceLicenseScreen() {
             libraries = libraries,
             libraryModifier = Modifier
                 .padding(vertical = 4.dp)
-                .clip(RoundedCornerShape(cornerRadius)),
+                .clip(RoundedCornerShape(cornerRadius))
+                .renderBackgroundBlur(),
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp)
-                .hazeSource(),
+                .blurSource(),
             contentPadding = paddingValues,// PaddingValues(horizontal = 16.dp),
             colors = LibraryDefaults.libraryColors(
-                libraryBackgroundColor = MaterialTheme.colorScheme.surfaceBright.copy(
+                libraryBackgroundColor = if (ThemeConfig.isEnableBlurExp) Color.Transparent else MaterialTheme.colorScheme.surfaceBright.copy(
                     alpha = CardConfig.cardAlpha
                 ),
                 libraryContentColor = MaterialTheme.colorScheme.onSurface,
@@ -179,9 +184,10 @@ fun OpenSourceLicenseScreen() {
                         item {
                             WarningCard(
                                 color = MaterialTheme.colorScheme.tertiary,
+                                renderBackground = false,
                                 icon = {
                                     Icon(
-                                        imageVector = Icons.Rounded.LocalPolice,
+                                        imageVector = Icons.TwoTone.LocalPolice,
                                         contentDescription = null,
                                     )
                                 },
@@ -197,7 +203,7 @@ fun OpenSourceLicenseScreen() {
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(16.dp),
                                 colors = CardDefaults.outlinedCardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                                    containerColor = MaterialTheme.colorScheme.surfaceBright
                                 )
                             ) {
                                 Column(

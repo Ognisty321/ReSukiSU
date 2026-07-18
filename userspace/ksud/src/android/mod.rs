@@ -10,7 +10,6 @@ mod init_event;
 mod kpm;
 mod ksucalls;
 mod late_load;
-mod magica;
 mod module;
 mod profile;
 mod resetprop;
@@ -19,6 +18,8 @@ mod sepolicy;
 mod su;
 mod sulog;
 mod susfs;
+#[allow(nonstandard_style, unused, unsafe_op_in_unsafe_fn)]
+pub mod uapi;
 mod umount_config;
 mod unload;
 pub mod utils;

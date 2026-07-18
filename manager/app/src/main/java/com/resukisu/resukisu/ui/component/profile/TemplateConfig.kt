@@ -5,8 +5,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ReadMore
-import androidx.compose.material.icons.automirrored.rounded.Article
+import androidx.compose.material.icons.automirrored.twotone.Article
+import androidx.compose.material.icons.automirrored.twotone.ReadMore
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
@@ -20,7 +20,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.resukisu.resukisu.Natives
 import com.resukisu.resukisu.R
-import com.resukisu.resukisu.ui.component.settings.SettingsDropdownWidget
+import com.resukisu.resukisu.ui.component.settings.SettingsChooseWidget
 import com.resukisu.resukisu.ui.util.listAppProfileTemplates
 import com.resukisu.resukisu.ui.util.setSepolicy
 import com.resukisu.resukisu.ui.viewmodel.getTemplateInfoById
@@ -34,25 +34,23 @@ import com.resukisu.resukisu.ui.viewmodel.getTemplateInfoById
 fun TemplateConfig(
     profile: Natives.Profile,
     onViewTemplate: (id: String) -> Unit = {},
-    onManageTemplate: () -> Unit = {},
     onProfileChange: (Natives.Profile) -> Unit
 ) {
-//    var expanded by remember { mutableStateOf(false) }
     var template by rememberSaveable {
         mutableStateOf(profile.rootTemplate ?: "")
     }
     val profileTemplates = listOf("None") + listAppProfileTemplates()
-//    val noTemplates = profileTemplates.isEmpty()
+    val currentIndex = profileTemplates.indexOf(template).let { if (it == -1) 0 else it }
 
-    SettingsDropdownWidget(
-        icon = Icons.AutoMirrored.Rounded.Article,
+    SettingsChooseWidget(
+        icon = Icons.AutoMirrored.TwoTone.Article,
         title = stringResource(R.string.profile_template),
         items = profileTemplates,
-        selectedIndex = profileTemplates.indexOf(template) + 1,
+        selectedIndex = currentIndex,
         afterContent = { index ->
-            if (index == 0) return@SettingsDropdownWidget
+            if (index == 0) return@SettingsChooseWidget
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.ReadMore,
+                imageVector = Icons.AutoMirrored.TwoTone.ReadMore,
                 contentDescription = null,
                 modifier = Modifier
                     .size(35.dp)
@@ -66,13 +64,13 @@ fun TemplateConfig(
     ) { index ->
         if (index == 0) {
             template = ""
-            return@SettingsDropdownWidget
+            return@SettingsChooseWidget
         }
 
-        template = profileTemplates[index - 1]
+        template = profileTemplates[index]
 
         val templateInfo =
-            getTemplateInfoById(template) ?: return@SettingsDropdownWidget
+            getTemplateInfoById(template) ?: return@SettingsChooseWidget
 
         if (setSepolicy(template, templateInfo.rules.joinToString("\n"))) {
             onProfileChange(

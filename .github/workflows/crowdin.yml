@@ -13,13 +13,14 @@ on:
 
 jobs:
   synchronize-with-crowdin:
+    environment: action
     runs-on: ubuntu-latest
     env:
       CROWDIN_PROJECT_ID: ${{ secrets.CROWDIN_PROJECT_ID }}
       CROWDIN_API_TOKEN: ${{ secrets.CROWDIN_API_TOKEN }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
 
     - name: Check Crowdin secrets
       if: ${{ env.CROWDIN_PROJECT_ID == '' || env.CROWDIN_API_TOKEN == '' }}
@@ -44,6 +45,6 @@ jobs:
         config: 'crowdin.yml'
         crowdin_branch_name: "main"
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         CROWDIN_PROJECT_ID: ${{ env.CROWDIN_PROJECT_ID }}
         CROWDIN_API_TOKEN: ${{ env.CROWDIN_API_TOKEN }}

@@ -1,17 +1,8 @@
 package com.resukisu.resukisu.ui.screen.main
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -41,20 +32,16 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Article
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.RestoreFromTrash
-import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.automirrored.twotone.Article
 import androidx.compose.material.icons.twotone.Archive
+import androidx.compose.material.icons.twotone.ChevronRight
+import androidx.compose.material.icons.twotone.MoreVert
+import androidx.compose.material.icons.twotone.Refresh
+import androidx.compose.material.icons.twotone.RestoreFromTrash
+import androidx.compose.material.icons.twotone.Save
 import androidx.compose.material.icons.twotone.SearchOff
-import androidx.compose.material3.Checkbox
+import androidx.compose.material.icons.twotone.Visibility
+import androidx.compose.material.icons.twotone.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
@@ -66,6 +53,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SheetState
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -73,7 +61,7 @@ import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -95,6 +83,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
@@ -103,27 +92,22 @@ import coil.request.ImageRequest
 import com.resukisu.resukisu.Natives
 import com.resukisu.resukisu.R
 import com.resukisu.resukisu.ksuApp
-import com.resukisu.resukisu.ui.component.FabMenuPresets
 import com.resukisu.resukisu.ui.component.SearchAppBar
 import com.resukisu.resukisu.ui.component.SwipeableSnackbarHost
-import com.resukisu.resukisu.ui.component.VerticalExpandableFab
 import com.resukisu.resukisu.ui.component.settings.SettingsBaseWidget
-import com.resukisu.resukisu.ui.component.settings.splicedLazyColumnGroup
+import com.resukisu.resukisu.ui.component.settings.lazySegmentColumn
 import com.resukisu.resukisu.ui.navigation.LocalNavigator
 import com.resukisu.resukisu.ui.navigation.Route
 import com.resukisu.resukisu.ui.screen.LabelText
-import com.resukisu.resukisu.ui.theme.hazeSource
+import com.resukisu.resukisu.ui.theme.blurSource
 import com.resukisu.resukisu.ui.util.LocalSnackbarHost
 import com.resukisu.resukisu.ui.util.module.ModuleModify
 import com.resukisu.resukisu.ui.viewmodel.AppCategory
 import com.resukisu.resukisu.ui.viewmodel.SortType
+import com.resukisu.resukisu.ui.viewmodel.SuperUserUiState
 import com.resukisu.resukisu.ui.viewmodel.SuperUserViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-
-enum class AppPriority(val value: Int) {
-    ROOT(1), CUSTOM(2), DEFAULT(3)
-}
 
 data class BottomSheetMenuItem(
     val icon: ImageVector,
@@ -138,13 +122,17 @@ fun SuperUserPage(bottomPadding: Dp) {
     val viewModel = viewModel<SuperUserViewModel>(
         viewModelStoreOwner = ksuApp
     )
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val topAppBarState = rememberTopAppBarState()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(topAppBarState)
     val listState = rememberLazyListState()
     val snackBarHostState = LocalSnackbarHost.current
 
-    val bottomSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val bottomSheetState = rememberBottomSheetState(
+        initialValue = SheetValue.Hidden,
+        enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
+    )
     var showBottomSheet by remember { mutableStateOf(false) }
 
     val backupLauncher = ModuleModify.rememberAllowlistBackupLauncher(context, snackBarHostState)
@@ -153,71 +141,15 @@ fun SuperUserPage(bottomPadding: Dp) {
     val navigator = LocalNavigator.current
 
     LaunchedEffect(Unit) {
-        viewModel.search = ""
+        viewModel.updateSearch("")
     }
 
-    LaunchedEffect(viewModel.selectedApps, viewModel.showBatchActions) {
-        if (viewModel.showBatchActions && viewModel.selectedApps.isEmpty()) {
-            viewModel.showBatchActions = false
-        }
-    }
-
-    val filteredAndSortedAppGroups = remember(
-        viewModel.appGroupList,
-        viewModel.selectedCategory,
-        viewModel.currentSortType,
-        viewModel.search,
-        viewModel.showSystemApps
-    ) {
-        var groups = viewModel.appGroupList
-
-        // 按分类筛选
-        groups = when (viewModel.selectedCategory) {
-            AppCategory.ALL -> groups
-            AppCategory.ROOT -> groups.filter { it.allowSu }
-            AppCategory.CUSTOM -> groups.filter { !it.allowSu && it.hasCustomProfile }
-            AppCategory.DEFAULT -> groups.filter { !it.allowSu && !it.hasCustomProfile }
-        }
-
-        // 排序
-        groups.sortedWith { group1, group2 ->
-            val priority1 = when {
-                group1.allowSu -> AppPriority.ROOT
-                group1.hasCustomProfile -> AppPriority.CUSTOM
-                else -> AppPriority.DEFAULT
-            }
-            val priority2 = when {
-                group2.allowSu -> AppPriority.ROOT
-                group2.hasCustomProfile -> AppPriority.CUSTOM
-                else -> AppPriority.DEFAULT
-            }
-
-            val priorityComparison = priority1.value.compareTo(priority2.value)
-            if (priorityComparison != 0) {
-                priorityComparison
-            } else {
-                when (viewModel.currentSortType) {
-                    SortType.NAME_ASC -> group1.mainApp.label.lowercase()
-                        .compareTo(group2.mainApp.label.lowercase())
-                    SortType.NAME_DESC -> group2.mainApp.label.lowercase()
-                        .compareTo(group1.mainApp.label.lowercase())
-                    SortType.INSTALL_TIME_NEW -> group2.mainApp.packageInfo.firstInstallTime
-                        .compareTo(group1.mainApp.packageInfo.firstInstallTime)
-                    SortType.INSTALL_TIME_OLD -> group1.mainApp.packageInfo.firstInstallTime
-                        .compareTo(group2.mainApp.packageInfo.firstInstallTime)
-                    else -> group1.mainApp.label.lowercase()
-                        .compareTo(group2.mainApp.label.lowercase())
-                }
-            }
-        }
-    }
-
-    val appCounts = remember(viewModel.appGroupList, viewModel.showSystemApps) {
+    val appCounts = remember(uiState.appGroupList, uiState.showSystemApps) {
         mapOf(
-            AppCategory.ALL to viewModel.appGroupList.size,
-            AppCategory.ROOT to viewModel.appGroupList.count { it.allowSu },
-            AppCategory.CUSTOM to viewModel.appGroupList.count { !it.allowSu && it.hasCustomProfile },
-            AppCategory.DEFAULT to viewModel.appGroupList.count { !it.allowSu && !it.hasCustomProfile }
+            AppCategory.ALL to uiState.appGroupList.size,
+            AppCategory.ROOT to uiState.appGroupList.count { it.allowSu },
+            AppCategory.CUSTOM to uiState.appGroupList.count { !it.allowSu && it.hasCustomProfile },
+            AppCategory.DEFAULT to uiState.appGroupList.count { !it.allowSu && !it.hasCustomProfile }
         )
     }
 
@@ -225,12 +157,12 @@ fun SuperUserPage(bottomPadding: Dp) {
         topBar = {
             SearchAppBar(
                 title = stringResource(R.string.superuser),
-                searchText = viewModel.search,
-                onSearchTextChange = { viewModel.search = it },
+                searchText = uiState.search,
+                onSearchTextChange = viewModel::updateSearch,
                 dropdownContent = {
                     IconButton(onClick = { showBottomSheet = true }) {
                         Icon(
-                            imageVector = Icons.Filled.MoreVert,
+                            imageVector = Icons.TwoTone.MoreVert,
                             contentDescription = stringResource(id = R.string.settings),
                         )
                     }
@@ -240,7 +172,7 @@ fun SuperUserPage(bottomPadding: Dp) {
                         navigator.push(Route.Sulog)
                     }) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.Article,
+                            imageVector = Icons.AutoMirrored.TwoTone.Article,
                             contentDescription = stringResource(R.string.sulog)
                         )
                     }
@@ -255,14 +187,11 @@ fun SuperUserPage(bottomPadding: Dp) {
             SwipeableSnackbarHost(hostState = snackBarHostState)
         },
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
-        floatingActionButton = {
-            SuperUserFab(viewModel, filteredAndSortedAppGroups, listState, scope, bottomPadding)
-        }
     ) { innerPadding ->
         SuperUserContent(
             innerPadding = innerPadding,
             viewModel = viewModel,
-            filteredAndSortedAppGroups = filteredAndSortedAppGroups,
+            uiState = uiState,
             listState = listState,
             scrollBehavior = scrollBehavior,
             scope = scope,
@@ -274,6 +203,7 @@ fun SuperUserPage(bottomPadding: Dp) {
                 bottomSheetState = bottomSheetState,
                 onDismiss = { showBottomSheet = false },
                 viewModel = viewModel,
+                uiState = uiState,
                 appCounts = appCounts,
                 backupLauncher = backupLauncher,
                 restoreLauncher = restoreLauncher
@@ -282,63 +212,12 @@ fun SuperUserPage(bottomPadding: Dp) {
     }
 }
 
-@Composable
-private fun SuperUserFab(
-    viewModel: SuperUserViewModel,
-    filteredAndSortedAppGroups: List<SuperUserViewModel.AppGroup>,
-    listState: androidx.compose.foundation.lazy.LazyListState,
-    scope: CoroutineScope,
-    bottomPadding: Dp
-) {
-    VerticalExpandableFab(
-        modifier = Modifier.padding(bottom = bottomPadding + 5.dp),
-        menuItems = if (viewModel.showBatchActions && viewModel.selectedApps.isNotEmpty()) {
-            FabMenuPresets.getBatchActionMenuItems(
-                onCancel = {
-                    viewModel.selectedApps = emptySet()
-                    viewModel.showBatchActions = false
-                },
-                onDeny = { scope.launch { viewModel.updateBatchPermissions(false) } },
-                onAllow = { scope.launch { viewModel.updateBatchPermissions(true) } },
-                onUnmountModules = {
-                    scope.launch { viewModel.updateBatchPermissions(
-                        allowSu = false,
-                        umountModules = true
-                    ) }
-                },
-                onDisableUnmount = {
-                    scope.launch { viewModel.updateBatchPermissions(
-                        allowSu = false,
-                        umountModules = false
-                    ) }
-                }
-            )
-        } else {
-            FabMenuPresets.getScrollMenuItems(
-                onScrollToTop = { scope.launch { listState.animateScrollToItem(0) } },
-                onScrollToBottom = {
-                    scope.launch {
-                        val lastIndex = filteredAndSortedAppGroups.size - 1
-                        if (lastIndex >= 0) listState.animateScrollToItem(lastIndex)
-                    }
-                }
-            )
-        },
-        mainButtonIcon = if (viewModel.showBatchActions && viewModel.selectedApps.isNotEmpty()) {
-            Icons.Filled.GridView
-        } else {
-            Icons.Filled.Add
-        },
-        mainButtonExpandedIcon = Icons.Filled.Close
-    )
-}
-
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun SuperUserContent(
     innerPadding: PaddingValues,
     viewModel: SuperUserViewModel,
-    filteredAndSortedAppGroups: List<SuperUserViewModel.AppGroup>,
+    uiState: SuperUserUiState,
     listState: androidx.compose.foundation.lazy.LazyListState,
     scrollBehavior: TopAppBarScrollBehavior,
     scope: CoroutineScope,
@@ -347,7 +226,7 @@ private fun SuperUserContent(
     val navigator = LocalNavigator.current
     val pullRefreshState = rememberPullToRefreshState()
 
-    if (filteredAndSortedAppGroups.isEmpty()) {
+    if (uiState.appGroupList.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
@@ -357,12 +236,12 @@ private fun SuperUserContent(
                     .fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                if ((viewModel.isRefreshing || viewModel.appGroupList.isEmpty()) && viewModel.search.isEmpty()) {
+                if ((uiState.isRefreshing || uiState.appGroupList.isEmpty()) && uiState.search.isEmpty()) {
                     LoadingIndicator()
                 }
                 else {
-                    val selectedCategory = viewModel.selectedCategory
-                    val isSearchEmpty = viewModel.search.isNotEmpty()
+                    val selectedCategory = uiState.selectedCategory
+                    val isSearchEmpty = uiState.search.isNotEmpty()
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
@@ -394,17 +273,17 @@ private fun SuperUserContent(
     PullToRefreshBox(
         state = pullRefreshState,
         onRefresh = { scope.launch { viewModel.fetchAppList() } },
-        isRefreshing = viewModel.isRefreshing,
+        isRefreshing = uiState.isRefreshing,
         modifier = Modifier
             .fillMaxSize()
-            .hazeSource(),
+            .blurSource(),
         indicator = {
             PullToRefreshDefaults.LoadingIndicator(
                 modifier = Modifier
                     .padding(top = innerPadding.calculateTopPadding())
                     .align(Alignment.TopCenter),
                 state = pullRefreshState,
-                isRefreshing = viewModel.isRefreshing,
+                isRefreshing = uiState.isRefreshing,
             )
         },
     ) {
@@ -413,56 +292,24 @@ private fun SuperUserContent(
             modifier = Modifier
                 .fillMaxSize()
                 .nestedScroll(scrollBehavior.nestedScrollConnection),
-            contentPadding = remember {
-                PaddingValues(
-                    start = 0.dp,
-                    top = 0.dp,
-                    end = 0.dp,
-                    bottom = 72.dp + 5.dp + 5.dp // FAB + bottom padding of FAB x2
-                )
-            },
         ) {
             item {
                 Spacer(modifier = Modifier.height(innerPadding.calculateTopPadding()))
             }
-            splicedLazyColumnGroup(
-                items = filteredAndSortedAppGroups,
+            lazySegmentColumn(
+                items = uiState.appGroupList,
                 key = { _, appGroup -> "${appGroup.uid}-${appGroup.mainApp.packageName}" },
                 contentType = { _, _ -> "AppGroupItem" }
             ) { _, appGroup ->
                 AppGroupItem(
-                    appGroup = appGroup,
-                    isSelected = appGroup.packageNames.any {
-                        viewModel.selectedApps.contains(
-                            it
-                        )
-                    },
-                    onToggleSelection = {
-                        appGroup.packageNames.forEach {
-                            viewModel.toggleAppSelection(
-                                it
-                            )
-                        }
-                    },
-                    onClick = {
-                        if (viewModel.showBatchActions) {
-                            appGroup.packageNames.forEach { viewModel.toggleAppSelection(it) }
-                        } else {
-                            navigator.push(Route.AppProfile(appGroup))
-                        }
-                    },
-                    onLongClick = {
-                        if (!viewModel.showBatchActions) {
-                            viewModel.toggleBatchMode()
-                            appGroup.packageNames.forEach { viewModel.toggleAppSelection(it) }
-                        }
-                    },
-                    viewModel = viewModel
-                )
+                    appGroup = appGroup
+                ) {
+                    navigator.push(Route.AppProfile(appGroup))
+                }
             }
 
             item {
-                Spacer(modifier = Modifier.height(bottomPadding + innerPadding.calculateBottomPadding()))
+                Spacer(modifier = Modifier.height(bottomPadding + innerPadding.calculateBottomPadding() + 15.dp))
             }
         }
     }
@@ -474,35 +321,36 @@ private fun SuperUserBottomSheet(
     bottomSheetState: SheetState,
     onDismiss: () -> Unit,
     viewModel: SuperUserViewModel,
+    uiState: SuperUserUiState,
     appCounts: Map<AppCategory, Int>,
     backupLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>,
     restoreLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>
 ) {
-    val bottomSheetMenuItems = remember(viewModel.showSystemApps) {
+    val bottomSheetMenuItems = remember(uiState.showSystemApps) {
         listOf(
             BottomSheetMenuItem(
-                icon = Icons.Filled.Refresh,
+                icon = Icons.TwoTone.Refresh,
                 titleRes = R.string.refresh,
                 onClick = {
                     viewModel.viewModelScope.launch { viewModel.fetchAppList() }
                 }
             ),
             BottomSheetMenuItem(
-                icon = if (viewModel.showSystemApps) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                titleRes = if (viewModel.showSystemApps) R.string.hide_system_apps else R.string.show_system_apps,
+                icon = if (uiState.showSystemApps) Icons.TwoTone.VisibilityOff else Icons.TwoTone.Visibility,
+                titleRes = if (uiState.showSystemApps) R.string.hide_system_apps else R.string.show_system_apps,
                 onClick = {
-                    viewModel.updateShowSystemApps(!viewModel.showSystemApps)
+                    viewModel.updateShowSystemApps(!uiState.showSystemApps)
                 }
             ),
             BottomSheetMenuItem(
-                icon = Icons.Filled.Save,
+                icon = Icons.TwoTone.Save,
                 titleRes = R.string.backup_allowlist,
                 onClick = {
                     backupLauncher.launch(ModuleModify.createAllowlistBackupIntent())
                 }
             ),
             BottomSheetMenuItem(
-                icon = Icons.Filled.RestoreFromTrash,
+                icon = Icons.TwoTone.RestoreFromTrash,
                 titleRes = R.string.restore_allowlist,
                 onClick = {
                     restoreLauncher.launch(ModuleModify.createAllowlistRestoreIntent())
@@ -526,11 +374,11 @@ private fun SuperUserBottomSheet(
     ) {
         BottomSheetContent(
             menuItems = bottomSheetMenuItems,
-            currentSortType = viewModel.currentSortType,
+            currentSortType = uiState.currentSortType,
             onSortTypeChanged = { newSortType ->
                 viewModel.updateCurrentSortType(newSortType)
             },
-            selectedCategory = viewModel.selectedCategory,
+            selectedCategory = uiState.selectedCategory,
             onCategorySelected = { newCategory ->
                 viewModel.updateSelectedCategory(newCategory)
             },
@@ -654,7 +502,7 @@ private fun CategoryChip(
         color = if (isSelected) {
             MaterialTheme.colorScheme.primaryContainer
         } else {
-            MaterialTheme.colorScheme.surfaceVariant
+            MaterialTheme.colorScheme.surfaceBright
         },
         tonalElevation = if (isSelected) 4.dp else 0.dp
     ) {
@@ -753,20 +601,13 @@ private fun BottomSheetMenuItemView(menuItem: BottomSheetMenuItem) {
 @Composable
 private fun AppGroupItem(
     appGroup: SuperUserViewModel.AppGroup,
-    isSelected: Boolean,
-    onToggleSelection: () -> Unit,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    viewModel: SuperUserViewModel,
 ) {
     val mainApp = appGroup.mainApp
 
     SettingsBaseWidget(
         onClick = {
             onClick()
-        },
-        onLongClick = {
-            onLongClick()
         },
         title = mainApp.label,
         description = if (appGroup.apps.size > 1) {
@@ -799,20 +640,26 @@ private fun AppGroupItem(
                 } else if (!appGroup.allowSu) {
                     LabelText(
                         label = "DEFAULT",
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
                     )
                 }
                 if (appGroup.apps.size > 1) {
                     appGroup.userName?.let {
                         LabelText(
                             label = it,
-                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
                         )
                     }
                 }
+                if (appGroup.isRecentlyInstalled) {
+                    LabelText(
+                        label = stringResource(R.string.recently_installed),
+                        containerColor = MaterialTheme.colorScheme.surfaceBright
+                    )
+                }
             }
         },
-        rowHeader = {
+        leadingContent = {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(mainApp.packageInfo)
@@ -827,51 +674,11 @@ private fun AppGroupItem(
         },
         iconPlaceholder = false,
     ) {
-        AnimatedContent(
-            targetState = viewModel.showBatchActions,
-            transitionSpec = {
-                fadeIn(tween(200)) togetherWith
-                        fadeOut(tween(200))
-            },
-            label = "BatchActionTransition"
-        ) { showBatchActions ->
-            if (showBatchActions) {
-                val checkboxInteractionSource = remember { MutableInteractionSource() }
-                val isCheckboxPressed by checkboxInteractionSource.collectIsPressedAsState()
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    AnimatedVisibility(
-                        visible = isCheckboxPressed,
-                        enter = expandHorizontally() + fadeIn(),
-                        exit = shrinkHorizontally() + fadeOut()
-                    ) {
-                        Text(
-                            text = if (isSelected) stringResource(R.string.selected) else stringResource(R.string.select),
-                            style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(end = 4.dp)
-                        )
-                    }
-                    Checkbox(
-                        checked = isSelected,
-                        onCheckedChange = { onToggleSelection() },
-                        interactionSource = checkboxInteractionSource,
-                    )
-                }
-
-                BackHandler {
-                    viewModel.showBatchActions = false
-                }
-            } else {
-                Icon(
-                    imageVector = Icons.Filled.ChevronRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        }
+        Icon(
+            imageVector = Icons.TwoTone.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(24.dp)
+        )
     }
 }

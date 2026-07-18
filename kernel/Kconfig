@@ -2,6 +2,7 @@ menu "KernelSU"
 
 config KSU
 	  tristate "KernelSU function support"
+      select KALLSYMS
 	  default y
 	  help
 		Enable kernel-level root privileges on Android System.
@@ -69,15 +70,14 @@ config KSU_MULTI_MANAGER_SUPPORT
 		Enable multi KernelSU manager support
 
 config KPM
-    bool "Enable SukiSU KPM"
-    depends on KSU && 64BIT
-    select KALLSYMS
-    select KALLSYMS_ALL
-    default n
-    help
-	  Enabling this option will activate the KPM feature of SukiSU.
-	  This option is suitable for scenarios where you need to force KPM to be enabled.
-	  but it may affect system stability.
+	bool "Enable SukiSU KPM"
+	depends on KSU && 64BIT
+	select KALLSYMS
+	select KALLSYMS_ALL
+	default n
+	help
+	  Enable the KPM runtime. This feature is required by the WSA x86_64
+	  loader maintained in this fork and may affect system stability.
 
 choice
 	prompt "KernelSU Hooking Method"
@@ -105,7 +105,7 @@ config KSU_MANUAL_HOOK
 
 config KSU_SUSFS
 	bool "SUSFS Inline Hook"
-	depends on THREAD_INFO_IN_TASK
+	depends on THREAD_INFO_IN_TASK && 64BIT
 	help
 	  Patch and Enable SUSFS to kernel with KernelSU.
 	  SuSFS Officially support kernel 5.10+

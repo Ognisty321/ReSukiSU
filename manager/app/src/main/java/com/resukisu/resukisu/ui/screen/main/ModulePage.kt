@@ -2,7 +2,6 @@ package com.resukisu.resukisu.ui.screen.main
 
 import android.annotation.SuppressLint
 import android.app.Activity.CLIPBOARD_SERVICE
-import android.app.Activity.MODE_PRIVATE
 import android.app.Activity.RESULT_OK
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -45,26 +44,24 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Wysiwyg
-import androidx.compose.material.icons.automirrored.rounded.Undo
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.outlined.Cloud
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Download
-import androidx.compose.material.icons.outlined.Extension
-import androidx.compose.material.icons.outlined.PlayArrow
-import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Warning
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Photo
-import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.automirrored.twotone.Undo
+import androidx.compose.material.icons.automirrored.twotone.Wysiwyg
+import androidx.compose.material.icons.twotone.Check
+import androidx.compose.material.icons.twotone.ChevronRight
+import androidx.compose.material.icons.twotone.Close
+import androidx.compose.material.icons.twotone.Cloud
+import androidx.compose.material.icons.twotone.Delete
+import androidx.compose.material.icons.twotone.Download
+import androidx.compose.material.icons.twotone.Extension
+import androidx.compose.material.icons.twotone.MoreVert
+import androidx.compose.material.icons.twotone.Photo
+import androidx.compose.material.icons.twotone.PlayArrow
+import androidx.compose.material.icons.twotone.Refresh
+import androidx.compose.material.icons.twotone.Restore
+import androidx.compose.material.icons.twotone.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
@@ -77,6 +74,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -89,7 +87,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -121,7 +119,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -129,6 +126,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.resukisu.resukisu.Natives
 import com.resukisu.resukisu.R
+import com.resukisu.resukisu.data.AppPreferencesRepository
+import com.resukisu.resukisu.data.appPreferences
 import com.resukisu.resukisu.ksuApp
 import com.resukisu.resukisu.ui.component.ConfirmResult
 import com.resukisu.resukisu.ui.component.InstallConfirmationDialog
@@ -140,17 +139,18 @@ import com.resukisu.resukisu.ui.component.ZipFileInfo
 import com.resukisu.resukisu.ui.component.ZipType
 import com.resukisu.resukisu.ui.component.rememberConfirmDialog
 import com.resukisu.resukisu.ui.component.rememberLoadingDialog
+import com.resukisu.resukisu.ui.component.settings.SegmentedColumn
 import com.resukisu.resukisu.ui.component.settings.SettingsBaseWidget
 import com.resukisu.resukisu.ui.component.settings.SettingsJumpPageWidget
 import com.resukisu.resukisu.ui.component.settings.SettingsTextFieldWidget
-import com.resukisu.resukisu.ui.component.settings.SplicedColumnGroup
 import com.resukisu.resukisu.ui.navigation.LocalNavigator
 import com.resukisu.resukisu.ui.navigation.Route
 import com.resukisu.resukisu.ui.screen.FlashIt
 import com.resukisu.resukisu.ui.screen.LabelText
-import com.resukisu.resukisu.ui.theme.getCardColors
-import com.resukisu.resukisu.ui.theme.getCardElevation
-import com.resukisu.resukisu.ui.theme.hazeSource
+import com.resukisu.resukisu.ui.theme.CardConfig
+import com.resukisu.resukisu.ui.theme.ThemeConfig
+import com.resukisu.resukisu.ui.theme.blurSource
+import com.resukisu.resukisu.ui.theme.renderBackgroundBlur
 import com.resukisu.resukisu.ui.util.LocalPermissionRequestInterface
 import com.resukisu.resukisu.ui.util.LocalSnackbarHost
 import com.resukisu.resukisu.ui.util.downloader.download
@@ -161,6 +161,7 @@ import com.resukisu.resukisu.ui.util.reboot
 import com.resukisu.resukisu.ui.util.toggleModule
 import com.resukisu.resukisu.ui.util.undoUninstallModule
 import com.resukisu.resukisu.ui.util.uninstallModule
+import com.resukisu.resukisu.ui.viewmodel.ModuleUiState
 import com.resukisu.resukisu.ui.viewmodel.ModuleViewModel
 import com.resukisu.resukisu.ui.webui.WebUIActivity
 import com.topjohnwu.superuser.io.SuFile
@@ -186,13 +187,15 @@ fun ModulePage(bottomPadding: Dp) {
     val viewModel = viewModel<ModuleViewModel>(
         viewModelStoreOwner = ksuApp
     )
-    val prefs = context.getSharedPreferences("settings", MODE_PRIVATE)
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val prefs = context.appPreferences
     val snackBarHost = LocalSnackbarHost.current
     val scope = rememberCoroutineScope()
     var lastClickTime by remember { mutableStateOf(0L) }
 
-    val bottomSheetState = rememberModalBottomSheetState(
-        skipPartiallyExpanded = true
+    val bottomSheetState = rememberBottomSheetState(
+        initialValue = SheetValue.Hidden,
+        enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
     )
     var showBottomSheet by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -285,10 +288,12 @@ fun ModulePage(bottomPadding: Dp) {
     }
 
     LaunchedEffect(Unit) {
-        viewModel.search = ""
-        if (viewModel.moduleList.isEmpty() || viewModel.isNeedRefresh) {
-            viewModel.sortEnabledFirst = prefs.getBoolean("module_sort_enabled_first", false)
-            viewModel.sortActionFirst = prefs.getBoolean("module_sort_action_first", false)
+        viewModel.updateSearch("")
+        viewModel.setSortOptions(
+            sortEnabledFirst = prefs.getBoolean("module_sort_enabled_first", false),
+            sortActionFirst = prefs.getBoolean("module_sort_action_first", false),
+        )
+        if (uiState.moduleList.isEmpty() || uiState.isNeedRefresh) {
             viewModel.fetchModuleList()
         }
     }
@@ -304,14 +309,14 @@ fun ModulePage(bottomPadding: Dp) {
         topBar = {
             SearchAppBar(
                 title = stringResource(R.string.module),
-                searchText = viewModel.search,
-                onSearchTextChange = { viewModel.search = it },
+                searchText = uiState.search,
+                onSearchTextChange = viewModel::updateSearch,
                 dropdownContent = {
                     IconButton(
                         onClick = { showBottomSheet = true },
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.MoreVert,
+                            imageVector = Icons.TwoTone.MoreVert,
                             contentDescription = stringResource(id = R.string.settings),
                         )
                     }
@@ -323,7 +328,7 @@ fun ModulePage(bottomPadding: Dp) {
                         }
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.Cloud,
+                            imageVector = Icons.TwoTone.Cloud,
                             contentDescription = stringResource(id = R.string.module_repo),
                         )
                     }
@@ -379,7 +384,7 @@ fun ModulePage(bottomPadding: Dp) {
                         verticalArrangement = Arrangement.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.Warning,
+                            imageVector = Icons.TwoTone.Warning,
                             contentDescription = null,
                             modifier = Modifier
                                 .size(64.dp)
@@ -393,7 +398,7 @@ fun ModulePage(bottomPadding: Dp) {
                     }
                 }
             }
-            viewModel.moduleList.isEmpty() -> {
+            uiState.moduleList.isEmpty() -> {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -405,14 +410,18 @@ fun ModulePage(bottomPadding: Dp) {
                         verticalArrangement = Arrangement.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.Extension,
+                            imageVector = Icons.TwoTone.Extension,
                             contentDescription = null,
                             modifier = Modifier
                                 .size(96.dp)
                                 .padding(bottom = 16.dp)
                         )
                         Text(
-                            text = stringResource(R.string.module_empty),
+                            text =
+                                if (uiState.search.isNotEmpty())
+                                    stringResource(R.string.search_no_any_match)
+                                else
+                                    stringResource(R.string.module_empty),
                             textAlign = TextAlign.Center,
                             style = MaterialTheme.typography.bodyLarge,
                         )
@@ -422,6 +431,7 @@ fun ModulePage(bottomPadding: Dp) {
             else -> {
                 ModuleList(
                     viewModel = viewModel,
+                    uiState = uiState,
                     listState = listState,
                     modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
                     onUpdateModule = {
@@ -468,7 +478,9 @@ fun ModulePage(bottomPadding: Dp) {
                 sheetState = bottomSheetState,
                 dragHandle = {
                     Surface(
-                        modifier = Modifier.padding(vertical = 11.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(16.dp))
+                            .padding(vertical = 11.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                         shape = RoundedCornerShape(16.dp)
                     ) {
@@ -483,6 +495,7 @@ fun ModulePage(bottomPadding: Dp) {
             ) {
                 ModuleBottomSheetContent(
                     viewModel = viewModel,
+                    uiState = uiState,
                     prefs = prefs
                 )
             }
@@ -494,7 +507,8 @@ fun ModulePage(bottomPadding: Dp) {
 @Composable
 private fun ModuleBottomSheetContent(
     viewModel: ModuleViewModel,
-    prefs: android.content.SharedPreferences
+    uiState: ModuleUiState,
+    prefs: AppPreferencesRepository
 ) {
     Column(
         modifier = Modifier
@@ -533,17 +547,15 @@ private fun ModuleBottomSheetContent(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Switch(
-                    checked = viewModel.sortActionFirst,
+                    checked = uiState.sortActionFirst,
                     onCheckedChange = { checked ->
-                        viewModel.sortActionFirst = checked
-                        prefs.edit {
-                            putBoolean("module_sort_action_first", checked)
-                        }
+                        viewModel.setSortActionFirst(checked)
+                        prefs.putBoolean("module_sort_action_first", checked)
                     },
                     thumbContent = {
-                        if (viewModel.sortActionFirst) {
+                        if (uiState.sortActionFirst) {
                             Icon(
-                                imageVector = Icons.Filled.Check,
+                                imageVector = Icons.TwoTone.Check,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(SwitchDefaults.IconSize),
@@ -551,9 +563,9 @@ private fun ModuleBottomSheetContent(
                         } else
                         {
                             Icon(
-                                imageVector = Icons.Filled.Close,
+                                imageVector = Icons.TwoTone.Close,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                tint = MaterialTheme.colorScheme.surfaceBright,
                                 modifier = Modifier.size(SwitchDefaults.IconSize),
                             )
                         }
@@ -572,17 +584,15 @@ private fun ModuleBottomSheetContent(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Switch(
-                    checked = viewModel.sortEnabledFirst,
+                    checked = uiState.sortEnabledFirst,
                     onCheckedChange = { checked ->
-                        viewModel.sortEnabledFirst = checked
-                        prefs.edit {
-                            putBoolean("module_sort_enabled_first", checked)
-                        }
+                        viewModel.setSortEnabledFirst(checked)
+                        prefs.putBoolean("module_sort_enabled_first", checked)
                     },
                     thumbContent = {
-                        if (viewModel.sortEnabledFirst) {
+                        if (uiState.sortEnabledFirst) {
                             Icon(
-                                imageVector = Icons.Filled.Check,
+                                imageVector = Icons.TwoTone.Check,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(SwitchDefaults.IconSize),
@@ -590,9 +600,9 @@ private fun ModuleBottomSheetContent(
                         } else
                         {
                             Icon(
-                                imageVector = Icons.Filled.Close,
+                                imageVector = Icons.TwoTone.Close,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                tint = MaterialTheme.colorScheme.surfaceBright,
                                 modifier = Modifier.size(SwitchDefaults.IconSize),
                             )
                         }
@@ -606,11 +616,11 @@ private fun ModuleBottomSheetContent(
 var showMetamoduleWarning by mutableStateOf(true)
 
 private fun getMetaModuleWarningText(
-    viewModel: ModuleViewModel,
+    hasModuleRequireMount: Boolean,
     context: Context
 ) : String? {
     if (!showMetamoduleWarning) return null
-    if (!viewModel.hasModuleRequireMount) return null
+    if (!hasModuleRequireMount) return null
 
     val metaProp = SuFile.open("/data/adb/metamodule/module.prop").exists()
     val metaRemoved = SuFile.open("/data/adb/metamodule/remove").exists()
@@ -656,6 +666,7 @@ private fun MetaModuleWarningCard(
 @Composable
 private fun ModuleList(
     viewModel: ModuleViewModel,
+    uiState: ModuleUiState,
     listState: LazyListState,
     modifier: Modifier = Modifier,
     boxModifier: Modifier = Modifier,
@@ -932,25 +943,25 @@ private fun ModuleList(
         },
         modifier = boxModifier
             .fillMaxSize()
-            .hazeSource(),
+            .blurSource(),
         indicator = {
             PullToRefreshDefaults.LoadingIndicator(
                 modifier = Modifier
                     .padding(top = topPadding)
                     .align(Alignment.TopCenter),
                 state = pullRefreshState,
-                isRefreshing = viewModel.isRefreshing,
+                isRefreshing = uiState.isRefreshing,
             )
         },
-        isRefreshing = viewModel.isRefreshing
+        isRefreshing = uiState.isRefreshing
     ) {
         val metaModuleWarningText by produceState<String?>(
             initialValue = null,
-            viewModel.hasModuleRequireMount,
+            uiState.hasModuleRequireMount,
             showMetamoduleWarning
         ) {
             value = withContext(Dispatchers.IO) {
-                getMetaModuleWarningText(viewModel, context)
+                getMetaModuleWarningText(uiState.hasModuleRequireMount, context)
             }
         }
 
@@ -980,12 +991,13 @@ private fun ModuleList(
             }
 
             items(
-                items = viewModel.moduleList,
+                items = uiState.moduleList,
                 key = { "module-$it.id" }
             ) { module ->
                 ModuleItem(
                     viewModel = viewModel,
                     module = module,
+                    moduleSizes = uiState.moduleSizes,
                     updateUrl = module.moduleUpdate?.zipUrl.orEmpty(),
                     onUninstallClicked = {
                         viewModel.viewModelScope.launch {
@@ -1050,8 +1062,9 @@ private fun ModuleList(
 
     if (showShortcutDialog.value) {
         ModalBottomSheet(
-            sheetState = rememberModalBottomSheetState(
-                skipPartiallyExpanded = true
+            sheetState = rememberBottomSheetState(
+                initialValue = SheetValue.Hidden,
+                enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)
             ),
             onDismissRequest = {
                 showShortcutDialog.value = false
@@ -1127,18 +1140,19 @@ private fun ModuleList(
                         )
                     }
                 }
-                SplicedColumnGroup {
+                SegmentedColumn {
                     if (shortcutIconUri == defaultShortcutIconUri) {
                         item {
                             SettingsBaseWidget(
-                                icon = Icons.Rounded.Photo,
+                                icon = Icons.TwoTone.Photo,
+                                renderBackgroundBlur = false,
                                 title = stringResource(id = R.string.module_shortcut_icon_pick),
                                 onClick = {
                                     pickShortcutIconLauncher.launch("image/*")
                                 }
                             ) {
                                 Icon(
-                                    imageVector = Icons.Filled.ChevronRight,
+                                    imageVector = Icons.TwoTone.ChevronRight,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(24.dp)
@@ -1148,14 +1162,15 @@ private fun ModuleList(
                     } else {
                         item {
                             SettingsBaseWidget(
-                                icon = Icons.Rounded.Restore,
+                                icon = Icons.TwoTone.Restore,
+                                renderBackgroundBlur = false,
                                 title = stringResource(id = R.string.restore),
                                 onClick = {
                                     shortcutIconUri = defaultShortcutIconUri
                                 }
                             ) {
                                 Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.Undo,
+                                    imageVector = Icons.AutoMirrored.TwoTone.Undo,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(24.dp)
@@ -1183,7 +1198,8 @@ private fun ModuleList(
                     if (hasExistingShortcut) {
                         item {
                             SettingsJumpPageWidget(
-                                icon = Icons.Rounded.Delete,
+                                icon = Icons.TwoTone.Delete,
+                                renderBackgroundBlur = false,
                                 title = stringResource(id = R.string.module_shortcut_delete),
                                 onClick = {
                                     val moduleId = shortcutModuleId
@@ -1250,6 +1266,7 @@ private fun ModuleList(
 fun ModuleItem(
     viewModel: ModuleViewModel,
     module: ModuleViewModel.ModuleInfo,
+    moduleSizes: Map<String, String>,
     updateUrl: String,
     onUninstallClicked: (ModuleViewModel.ModuleInfo) -> Unit,
     onCheckChanged: (Boolean) -> Unit,
@@ -1259,7 +1276,7 @@ fun ModuleItem(
 ) {
     val navigator = LocalNavigator.current
     val context = LocalContext.current
-    val prefs = context.getSharedPreferences("settings", MODE_PRIVATE)
+    val prefs = context.appPreferences
     val isHideTagRow = prefs.getBoolean("is_hide_tag_row", false)
     // 获取显示更多模块信息的设置
     val showMoreModuleInfo = prefs.getBoolean("show_more_module_info", false)
@@ -1268,9 +1285,16 @@ fun ModuleItem(
     val clipboardManager = context.getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
     val hapticFeedback = LocalHapticFeedback.current
 
-    ElevatedCard(
-        colors = getCardColors(MaterialTheme.colorScheme.surfaceContainerHighest),
-        elevation = getCardElevation(),
+    Surface(
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .renderBackgroundBlur(),
+        color =
+            if (ThemeConfig.isEnableBlurExp)
+                Color.Transparent
+            else
+                MaterialTheme.colorScheme.surfaceBright.copy(CardConfig.cardAlpha),
+        shape = RoundedCornerShape(16.dp)
     ) {
         val textDecoration = if (!module.remove) null else TextDecoration.LineThrough
         val interactionSource = remember { MutableInteractionSource() }
@@ -1279,9 +1303,7 @@ fun ModuleItem(
             viewModel.loadSize(module.dirId)
         }
 
-        val sizes by viewModel.moduleSize.collectAsStateWithLifecycle()
-
-        val sizeStr = sizes[module.dirId]
+        val sizeStr = moduleSizes[module.dirId]
 
         Column(
             modifier = Modifier
@@ -1394,7 +1416,7 @@ fun ModuleItem(
                         thumbContent = {
                             if (module.enabled) {
                                 Icon(
-                                    imageVector = Icons.Filled.Check,
+                                    imageVector = Icons.TwoTone.Check,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(SwitchDefaults.IconSize),
@@ -1402,9 +1424,9 @@ fun ModuleItem(
                             } else
                             {
                                 Icon(
-                                    imageVector = Icons.Filled.Close,
+                                    imageVector = Icons.TwoTone.Close,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    tint = MaterialTheme.colorScheme.surfaceBright,
                                     modifier = Modifier.size(SwitchDefaults.IconSize),
                                 )
                             }
@@ -1473,7 +1495,7 @@ fun ModuleItem(
                     ) {
                         Icon(
                             modifier = Modifier.size(20.dp),
-                            imageVector = Icons.Outlined.PlayArrow,
+                            imageVector = Icons.TwoTone.PlayArrow,
                             contentDescription = null
                         )
                     }
@@ -1489,7 +1511,7 @@ fun ModuleItem(
                     ) {
                         Icon(
                             modifier = Modifier.size(20.dp),
-                            imageVector = Icons.AutoMirrored.Outlined.Wysiwyg,
+                            imageVector = Icons.AutoMirrored.TwoTone.Wysiwyg,
                             contentDescription = null
                         )
                     }
@@ -1507,7 +1529,7 @@ fun ModuleItem(
                     ) {
                         Icon(
                             modifier = Modifier.size(20.dp),
-                            imageVector = Icons.Outlined.Download,
+                            imageVector = Icons.TwoTone.Download,
                             contentDescription = null
                         )
                     }
@@ -1521,7 +1543,7 @@ fun ModuleItem(
                     if (!module.remove) {
                         Icon(
                             modifier = Modifier.size(20.dp),
-                            imageVector = Icons.Outlined.Delete,
+                            imageVector = Icons.TwoTone.Delete,
                             contentDescription = null,
                         )
                     } else {
@@ -1529,7 +1551,7 @@ fun ModuleItem(
                             modifier = Modifier
                                 .size(20.dp)
                                 .rotate(180f),
-                            imageVector = Icons.Outlined.Refresh,
+                            imageVector = Icons.TwoTone.Refresh,
                             contentDescription = null
                         )
                     }
@@ -1564,6 +1586,7 @@ fun ModuleItemPreview() {
     ModuleItem(
         viewModel<ModuleViewModel>(),
         module,
+        emptyMap(),
         "",
         {},
         {},

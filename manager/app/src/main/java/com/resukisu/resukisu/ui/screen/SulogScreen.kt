@@ -24,20 +24,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.twotone.DeleteSweep
+import androidx.compose.material.icons.twotone.FilterList
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuGroup
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenuPopup
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -78,12 +80,12 @@ import com.resukisu.resukisu.R
 import com.resukisu.resukisu.ui.component.SearchAppBar
 import com.resukisu.resukisu.ui.component.WarningCard
 import com.resukisu.resukisu.ui.component.settings.SettingsBaseWidget
-import com.resukisu.resukisu.ui.component.settings.SettingsDropdownWidget
-import com.resukisu.resukisu.ui.component.settings.splicedLazyColumnGroup
+import com.resukisu.resukisu.ui.component.settings.SettingsChooseWidget
+import com.resukisu.resukisu.ui.component.settings.lazySegmentColumn
 import com.resukisu.resukisu.ui.navigation.LocalNavigator
 import com.resukisu.resukisu.ui.theme.CardConfig
-import com.resukisu.resukisu.ui.theme.hazeSource
-import com.resukisu.resukisu.ui.util.LocalHazeState
+import com.resukisu.resukisu.ui.theme.blurSource
+import com.resukisu.resukisu.ui.util.LocalBlurState
 import com.resukisu.resukisu.ui.util.SulogEntry
 import com.resukisu.resukisu.ui.util.SulogEventFilter
 import com.resukisu.resukisu.ui.util.SulogEventType
@@ -181,34 +183,47 @@ private fun SulogScreenContent(
                 dropdownContent = {
                     IconButton(onClick = actions.onCleanFile) {
                         Icon(
-                            imageVector = Icons.Filled.DeleteSweep,
+                            imageVector = Icons.TwoTone.DeleteSweep,
                             contentDescription = stringResource(R.string.sulog_clean_title),
                         )
                     }
                     IconButton(onClick = { showFilterMenu = true }) {
                         Icon(
-                            imageVector = Icons.Filled.FilterList,
+                            imageVector = Icons.TwoTone.FilterList,
                             contentDescription = stringResource(R.string.sulog_filter_title),
                         )
-                    }
-                    DropdownMenu(
-                        expanded = showFilterMenu,
-                        onDismissRequest = { showFilterMenu = false },
-                    ) {
-                        SulogEventFilter.entries.forEach { filter ->
-                            DropdownMenuItem(
-                                text = { Text(sulogFilterLabel(filter)) },
-                                trailingIcon = {
-                                    Checkbox(
-                                        checked = filter in state.selectedFilters,
-                                        onCheckedChange = null,
+
+                        DropdownMenuPopup(
+                            expanded = showFilterMenu,
+                            onDismissRequest = { showFilterMenu = false },
+                        ) {
+                            DropdownMenuGroup(
+                                shapes = MenuDefaults.groupShapes()
+                            ) {
+                                Spacer(modifier = Modifier.height(2.dp))
+
+                                SulogEventFilter.entries.forEachIndexed { index, filter ->
+                                    DropdownMenuItem(
+                                        selected = filter in state.selectedFilters,
+                                        text = { Text(sulogFilterLabel(filter)) },
+                                        trailingIcon = {
+                                            Checkbox(
+                                                checked = filter in state.selectedFilters,
+                                                onCheckedChange = null,
+                                            )
+                                        },
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.VirtualKey)
+                                            actions.onToggleFilter(filter)
+                                        },
+                                        shapes = MenuDefaults.itemShape(
+                                            index = index,
+                                            count = SulogEventFilter.entries.size
+                                        )
                                     )
-                                },
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.VirtualKey)
-                                    actions.onToggleFilter(filter)
-                                },
-                            )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                }
+                            }
                         }
                     }
                 },
@@ -224,7 +239,7 @@ private fun SulogScreenContent(
             state = pullToRefreshState,
             modifier = Modifier
                 .fillMaxSize()
-                .hazeSource(),
+                .blurSource(),
             isRefreshing = state.isRefreshing,
             onRefresh = {
                 actions.onRefresh()
@@ -278,7 +293,7 @@ private fun SulogScreenContent(
                                         )
                                     )
                             ) {
-                                SettingsDropdownWidget(
+                                SettingsChooseWidget(
                                     iconPlaceholder = false,
                                     title = stringResource(R.string.sulog_log_files),
                                     items = fileSelector.items,
@@ -321,7 +336,7 @@ private fun SulogScreenContent(
 @Composable
 fun SulogScreenTranslationPreview() {
     CompositionLocalProvider(
-        LocalHazeState provides null
+        LocalBlurState provides null
     ) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainer
@@ -411,7 +426,7 @@ fun SulogScreenTranslationPreview() {
 @Composable
 fun SulogScreenPreview() {
     CompositionLocalProvider(
-        LocalHazeState provides null
+        LocalBlurState provides null
     ) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainer
@@ -585,7 +600,7 @@ private fun LazyListScope.sulogEntriesSection(
         }
 
         else -> {
-            splicedLazyColumnGroup(
+            lazySegmentColumn(
                 entries,
                 key = { index, entry -> "$index-${entry.key}" }) { index, entry ->
                 SettingsBaseWidget(

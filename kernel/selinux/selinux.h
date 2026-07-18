@@ -37,7 +37,7 @@ void apply_kernelsu_rules(void);
 
 int handle_sepolicy(void __user *user_data, u64 data_len);
 
-void setup_ksu_cred(void);
+void setup_ksu_cred_selinux(void);
 
 bool ksu_is_sid_equal(const struct cred *cred, u32 sid2);
 void ksu_set_zygote_sid(void);
@@ -56,5 +56,7 @@ void susfs_set_priv_app_sid(void);
 void escape_to_root_for_adb_root();
 
 extern u32 ksu_file_sid;
+
+void __init ksu_selinux_init();
 
 #endif
