@@ -52,10 +52,6 @@ static const struct ksu_feature_handler kernel_umount_handler = {
     .set_handler = kernel_umount_feature_set,
 };
 
-#ifdef CONFIG_KSU_SUSFS
-extern bool susfs_is_log_enabled;
-#endif // #ifdef CONFIG_KSU_SUSFS
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0) || defined(KSU_HAS_PATH_UMOUNT)
 extern int path_umount(struct path *path, int flags);
 static void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
@@ -177,7 +173,9 @@ int ksu_handle_umount(uid_t old_uid, uid_t new_uid)
 skip_umount_task:
     // do susfs setuid when susfs enabled
 #ifdef CONFIG_KSU_SUSFS
-    schedule_work(&susfs_extra_works);
+    if (!work_pending(&susfs_extra_works)) {
+        schedule_work(&susfs_extra_works);
+    }
     susfs_set_current_proc_umounted();
 #endif
 

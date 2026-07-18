@@ -332,14 +332,7 @@ fun SuSFSConfigScreen() {
     LaunchedEffect(Unit) {
         coroutineScope.launch {
             try {
-                val version = getSuSFSVersion()
-                val binaryName = "ksu_susfs_${version.removePrefix("v")}"
-
-                val isBinaryAvailable = try {
-                    context.assets.open(binaryName).use { true }
-                } catch (_: Exception) { false }
-
-                if (!isBinaryAvailable) {
+                if (!SuSFSManager.isBinaryAvailable(context)) {
                     showVersionMismatchDialog = true
                 }
             } catch (_: Exception) {

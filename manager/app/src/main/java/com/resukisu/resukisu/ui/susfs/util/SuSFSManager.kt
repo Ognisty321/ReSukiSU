@@ -73,7 +73,7 @@ object SuSFSManager {
     private const val MIN_VERSION_FOR_HIDE_MOUNT = "1.5.8"
     private const val MIN_VERSION_FOR_LOOP_PATH = "1.5.9"
     private const val MIN_VERSION_SUS_MAPS = "1.5.12"
-    const val MAX_SUSFS_VERSION = "2.0.0"
+    const val MAX_SUSFS_VERSION = "2.2.0"
     private const val BACKUP_FILE_EXTENSION = ".susfs_backup"
     private const val MEDIA_DATA_PATH = "/data/media/0/Android/data"
     private const val CGROUP_BASE_PATH = "/sys/fs/cgroup"
@@ -192,8 +192,9 @@ object SuSFSManager {
 
     private fun getSuSFSVersionUse(context: Context): String = try {
         val version = getSuSFSVersion()
-        val binaryName = "${SUSFS_BINARY_TARGET_NAME}_${version.removePrefix("v")}"
-        if (isBinaryAvailable(context, binaryName)) {
+        if (getSuSFSBinaryNameForVersion(context, version)?.let {
+                isBinaryAvailable(context, it)
+            } == true) {
             version
         } else {
             MAX_SUSFS_VERSION
@@ -206,7 +207,22 @@ object SuSFSManager {
         context.assets.open(binaryName).use { true }
     } catch (_: IOException) { false }
 
-    private fun getSuSFSBinaryName(context: Context): String = "${SUSFS_BINARY_TARGET_NAME}_${getSuSFSVersionUse(context).removePrefix("v")}"
+    private fun getSuSFSBinaryNameForVersion(context: Context, version: String): String? {
+        val versionSuffix = version.removePrefix("v")
+        val abi = Build.SUPPORTED_ABIS.firstOrNull { it == "arm64-v8a" || it == "x86_64" }
+            ?: return null
+        val architectureAsset = "${SUSFS_BINARY_TARGET_NAME}_${versionSuffix}_$abi"
+
+        if (isBinaryAvailable(context, architectureAsset)) {
+            return architectureAsset
+        }
+
+        // Older bundled helpers were arm64-only and did not carry an ABI suffix.
+        return if (abi == "arm64-v8a") "${SUSFS_BINARY_TARGET_NAME}_$versionSuffix" else null
+    }
+
+    private fun getSuSFSBinaryName(context: Context): String? =
+        getSuSFSBinaryNameForVersion(context, getSuSFSVersionUse(context))
 
     private fun getSuSFSTargetPath(): String = "/data/adb/ksu/bin/$SUSFS_BINARY_TARGET_NAME"
 
@@ -742,7 +758,7 @@ object SuSFSManager {
     // 二进制文件管理
     private suspend fun copyBinaryFromAssets(context: Context): String? = withContext(Dispatchers.IO) {
         try {
-            val binaryName = getSuSFSBinaryName(context)
+            val binaryName = getSuSFSBinaryName(context) ?: return@withContext null
             val targetPath = getSuSFSTargetPath()
             val tempFile = File(context.cacheDir, binaryName)
 
@@ -762,9 +778,8 @@ object SuSFSManager {
         }
     }
 
-    fun isBinaryAvailable(context: Context): Boolean = try {
-        context.assets.open(getSuSFSBinaryName(context)).use { true }
-    } catch (_: IOException) { false }
+    fun isBinaryAvailable(context: Context): Boolean =
+        getSuSFSBinaryName(context)?.let { isBinaryAvailable(context, it) } == true
 
     // 命令执行
     private suspend fun executeSusfsCommand(context: Context, command: String): Boolean = withContext(Dispatchers.IO) {
