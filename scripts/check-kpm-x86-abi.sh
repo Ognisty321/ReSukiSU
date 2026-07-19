@@ -35,7 +35,14 @@ for token in KSU_KPM_CAPS ksu_kpm_caps KSU_KPM_AUDIT; do
   fi
 done
 
-for token in SUKISU_KPM_X86_64_FEATURE_AUDIT SUKISU_KPM_X86_64_FEATURE_UNLOAD_GATE SUKISU_KPM_X86_64_FEATURE_SYSCALL_WRAP; do
+for token in \
+  SUKISU_KPM_X86_64_FEATURE_AUDIT \
+  SUKISU_KPM_X86_64_FEATURE_UNLOAD_GATE \
+  SUKISU_KPM_X86_64_FEATURE_SYSCALL_WRAP \
+  SUKISU_KPM_X86_64_FEATURE_STRICT_ELF \
+  SUKISU_KPM_X86_64_FEATURE_QUIESCENT_TEARDOWN \
+  SUKISU_KPM_X86_64_FEATURE_IMMUTABLE_ENTRYPOINTS \
+  SUKISU_KPM_X86_64_FEATURE_RUNTIME_STATS; do
   if ! grep -Fq "$token" "$header"; then
     echo "$header does not expose $token" >&2
     exit 1
@@ -69,7 +76,7 @@ for path in "${search_paths[@]}"; do
   [[ -e "$path" ]] && existing_paths+=("$path")
 done
 
-stale_pattern='ReSukiSU-x86_64-KPM-loader/0\.2($|[^0-9])'
+stale_pattern='ReSukiSU-x86_64-KPM-loader/(0\.2|0\.21)($|[^0-9])'
 if command -v rg >/dev/null 2>&1 && rg --version >/dev/null 2>&1; then
   stale_matches() { rg -n "$stale_pattern" "${existing_paths[@]}"; }
 else

@@ -8,6 +8,7 @@
  */
 
 #include <linux/cred.h>
+#include <linux/ctype.h>
 #include <linux/elf.h>
 #include <linux/err.h>
 #include <linux/ftrace.h>
@@ -21,16 +22,20 @@
 #include <linux/mm.h>
 #include <linux/moduleloader.h>
 #include <linux/mutex.h>
+#include <linux/overflow.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/set_memory.h>
 #include <linux/slab.h>
 #include <linux/static_call.h>
 #include <linux/string.h>
+#include <linux/task_work.h>
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
 #include <linux/version.h>
 #include <linux/vmalloc.h>
+#include <linux/wait.h>
+#include <linux/workqueue.h>
 #include <asm/alternative.h>
 #include <asm/cacheflush.h>
 #include <asm/elf.h>
@@ -45,6 +50,11 @@
 #include "kpm_loader_x86_64.h"
 
 #define SUKISU_KPM_MAX_MODULE_SIZE (16 * 1024 * 1024)
+#define SUKISU_KPM_MAX_LOADED_SIZE (32 * 1024 * 1024)
+#define SUKISU_KPM_MAX_SECTIONS 4096
+#define SUKISU_KPM_MAX_MODINFO_SIZE 4096
+#define SUKISU_KPM_MAX_NAME_LEN 31
+#define SUKISU_KPM_MAX_VERSION_LEN 127
 #define SUKISU_KPM_HOOK_NO_ERR 0
 #define SUKISU_KPM_HOOK_BAD_ADDRESS 4095
 #define SUKISU_KPM_HOOK_DUPLICATED 4094
@@ -67,6 +77,7 @@
 #define SUKISU_KPM_RELOCATE_INST_NUM (4 * 8 + 8 - 4)
 #define SUKISU_KPM_CHAIN_ITEM_EMPTY 0
 #define SUKISU_KPM_CHAIN_ITEM_READY 1
+#define SUKISU_KPM_CHAIN_ITEM_RETIRING 2
 #define SUKISU_KPM_WRAP_ARG_MAX 12
 #define SUKISU_KPM_WRAP_FRAME_CHAIN 0
 #define SUKISU_KPM_WRAP_FRAME_SKIP 8
@@ -126,6 +137,8 @@ struct sukisu_kpm_module {
     unsigned int wrap_item_count;
     unsigned int fp_wrap_item_count;
     unsigned int syscall_wrap_item_count;
+    unsigned int quiescing_count;
+    atomic_t active_callbacks;
     bool load_failed;
     bool unloading;
 };
@@ -215,6 +228,8 @@ struct sukisu_kpm_inline_hook {
     unsigned int patch_size;
     bool uses_text_poke_bp;
     struct sukisu_kpm_module *owner;
+    struct work_struct retire_work;
+    struct callback_head retire_task_work;
     u8 original[SUKISU_KPM_X86_MAX_STOLEN_SIZE];
 };
 
@@ -224,6 +239,8 @@ struct sukisu_kpm_fp_hook {
     void *replace;
     void *backup;
     struct sukisu_kpm_module *owner;
+    struct work_struct retire_work;
+    struct callback_head retire_task_work;
 };
 
 struct sukisu_kpm_wrap_chain {
@@ -237,10 +254,13 @@ struct sukisu_kpm_wrap_chain {
     u32 transit[SUKISU_KPM_TRANSIT_INST_NUM];
     struct list_head list;
     atomic_t active;
+    wait_queue_head_t idle_wait;
     int argno;
     bool disabled;
     void *stub;
     struct sukisu_kpm_module *owner;
+    struct work_struct retire_work;
+    struct sukisu_kpm_inline_hook *retired_hook;
 };
 
 struct sukisu_kpm_fp_wrap_chain {
@@ -254,10 +274,12 @@ struct sukisu_kpm_fp_wrap_chain {
     u32 transit[SUKISU_KPM_TRANSIT_INST_NUM];
     struct list_head list;
     atomic_t active;
+    wait_queue_head_t idle_wait;
     int argno;
     bool disabled;
     void *stub;
     struct sukisu_kpm_module *owner;
+    struct work_struct retire_work;
 };
 
 struct sukisu_kpm_syscall_wrap_chain {
@@ -271,10 +293,12 @@ struct sukisu_kpm_syscall_wrap_chain {
     void *afters[SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM];
     struct list_head list;
     atomic_t active;
+    wait_queue_head_t idle_wait;
     bool disabled;
     void *stub;
     void *origin;
     struct sukisu_kpm_module *owner;
+    struct work_struct retire_work;
 };
 
 struct sukisu_kpm_context_frame {
@@ -304,6 +328,17 @@ static int sukisu_kpm_has_config_compat;
 static const char sukisu_kpm_loader_version_string[] = SUKISU_KPM_LOADER_VERSION;
 static const u32 sukisu_kpm_loader_abi_version = SUKISU_KPM_X86_64_ABI_VERSION;
 static const u64 sukisu_kpm_loader_feature_bits = SUKISU_KPM_X86_64_FEATURE_BITS;
+static atomic64_t sukisu_kpm_load_attempts = ATOMIC64_INIT(0);
+static atomic64_t sukisu_kpm_load_successes = ATOMIC64_INIT(0);
+static atomic64_t sukisu_kpm_load_failures = ATOMIC64_INIT(0);
+static atomic64_t sukisu_kpm_unload_attempts = ATOMIC64_INIT(0);
+static atomic64_t sukisu_kpm_unload_successes = ATOMIC64_INIT(0);
+static atomic64_t sukisu_kpm_unload_failures = ATOMIC64_INIT(0);
+
+static void sukisu_kpm_retire_inline_hook_work(struct work_struct *work);
+static void sukisu_kpm_retire_fp_hook_work(struct work_struct *work);
+static void sukisu_kpm_retire_inline_hook_task_work(struct callback_head *work);
+static void sukisu_kpm_retire_fp_hook_task_work(struct callback_head *work);
 
 enum sukisu_kpm_ref_kind {
     SUKISU_KPM_REF_INLINE,
@@ -403,6 +438,33 @@ static void sukisu_kpm_module_ref_delta(struct sukisu_kpm_module *mod, enum suki
     }
 }
 
+static void sukisu_kpm_begin_owner_quiesce_locked(struct sukisu_kpm_module *mod)
+{
+    if (mod)
+        mod->quiescing_count++;
+}
+
+static void sukisu_kpm_end_owner_quiesce_locked(struct sukisu_kpm_module *mod)
+{
+    if (!mod)
+        return;
+
+    if (mod->quiescing_count)
+        mod->quiescing_count--;
+    else
+        pr_warn("kpm: quiescing counter underflow for %s\n", mod->info.name ? mod->info.name : "<unknown>");
+}
+
+static void sukisu_kpm_end_owner_quiesce(struct sukisu_kpm_module *mod)
+{
+    if (!mod)
+        return;
+
+    mutex_lock(&sukisu_kpm_hook_lock);
+    sukisu_kpm_end_owner_quiesce_locked(mod);
+    mutex_unlock(&sukisu_kpm_hook_lock);
+}
+
 static unsigned int sukisu_kpm_module_hook_refs(const struct sukisu_kpm_module *mod)
 {
     if (!mod)
@@ -477,15 +539,15 @@ static int sukisu_kpm_set_exec_rw_nx(void *ptr, size_t size)
     if (!ptr || !pages)
         return -EINVAL;
 
-    rc = set_memory_rw(start, pages);
-    if (rc) {
-        pr_err("kpm: set_memory_rw failed for %px size=%zu rc=%d\n", ptr, size, rc);
-        return rc;
-    }
-
     rc = set_memory_nx(start, pages);
     if (rc) {
         pr_err("kpm: set_memory_nx failed for %px size=%zu rc=%d\n", ptr, size, rc);
+        return rc;
+    }
+
+    rc = set_memory_rw(start, pages);
+    if (rc) {
+        pr_err("kpm: set_memory_rw failed for %px size=%zu rc=%d\n", ptr, size, rc);
         return rc;
     }
 
@@ -494,6 +556,7 @@ static int sukisu_kpm_set_exec_rw_nx(void *ptr, size_t size)
 
 static void sukisu_kpm_sync_before_exec_free(void)
 {
+    synchronize_rcu();
     synchronize_rcu_tasks_rude();
     synchronize_rcu_tasks();
 }
@@ -577,6 +640,15 @@ static bool sukisu_kpm_bad_hook_target_addr(unsigned long addr)
     return !kernel_text_address(addr);
 }
 
+static bool sukisu_kpm_bad_hook_target_range(unsigned long addr, size_t len)
+{
+    unsigned long last;
+
+    if (!len || check_add_overflow(addr, len - 1, &last))
+        return true;
+    return sukisu_kpm_bad_hook_target_addr(addr) || !kernel_text_address(last);
+}
+
 static bool sukisu_kpm_bad_exec_addr(unsigned long addr, bool allow_generated_exec)
 {
     struct sukisu_kpm_module *mod;
@@ -597,11 +669,35 @@ static int sukisu_kpm_patch_bytes(void *addr, const void *bytes, size_t len)
 {
     if (!addr || !bytes || !len)
         return -EINVAL;
+    if (offset_in_page(addr) + len > PAGE_SIZE)
+        return -ERANGE;
     if (WARN_ON_ONCE(in_interrupt() || irqs_disabled()))
         return -EWOULDBLOCK;
     might_sleep();
 
     return ksu_patch_text(addr, (void *)bytes, len, SUKISU_KPM_PATCH_FLAGS);
+}
+
+static int sukisu_kpm_patch_bytes_if_matches(void *addr, const void *expected, const void *replacement, size_t len)
+{
+    u8 current[SUKISU_KPM_X86_MAX_STOLEN_SIZE];
+    int rc;
+
+    if (!expected || !replacement || !len || len > sizeof(current))
+        return -EINVAL;
+
+    rc = copy_from_kernel_nofault(current, addr, len);
+    if (rc)
+        return rc;
+    if (memcmp(current, expected, len))
+        return -EBUSY;
+
+    return sukisu_kpm_patch_bytes(addr, replacement, len);
+}
+
+static int sukisu_kpm_patch_pointer_if_matches(unsigned long addr, void *expected, void *replacement)
+{
+    return sukisu_kpm_patch_bytes_if_matches((void *)addr, &expected, &replacement, sizeof(expected));
 }
 
 static bool sukisu_kpm_rel32_fits(const void *addr, const void *target, size_t insn_len)
@@ -740,17 +836,27 @@ static int sukisu_kpm_build_trampoline(void *func, void *trampoline, unsigned in
 
 static bool sukisu_kpm_text_range_reserved(void *start, unsigned int len)
 {
+    unsigned long first = (unsigned long)start;
+    unsigned long last;
     void *end;
 
     if (!len)
         return true;
 
-    end = start + len - 1;
-    if (ftrace_location((unsigned long)start))
+    if (check_add_overflow(first, len - 1, &last))
+        return true;
+
+    end = (void *)last;
+    if (ftrace_location_range(first, last))
         return true;
 #ifdef CONFIG_KPROBES
-    if (get_kprobe((kprobe_opcode_t *)start))
-        return true;
+    for (;;) {
+        if (within_kprobe_blacklist(first) || get_kprobe((kprobe_opcode_t *)first))
+            return true;
+        if (first == last)
+            break;
+        first++;
+    }
 #endif
     if (ftrace_text_reserved(start, end))
         return true;
@@ -800,6 +906,8 @@ static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void
     hook = kzalloc(sizeof(*hook), GFP_KERNEL);
     if (!hook)
         return SUKISU_KPM_HOOK_NO_MEM;
+    INIT_WORK(&hook->retire_work, sukisu_kpm_retire_inline_hook_work);
+    init_task_work(&hook->retire_task_work, sukisu_kpm_retire_inline_hook_task_work);
 
     hook->trampoline = module_alloc(SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE);
     if (!hook->trampoline) {
@@ -820,6 +928,11 @@ static int sukisu_kpm_install_inline_hook_locked(void *func, void *replace, void
     if (sukisu_kpm_text_range_reserved(func, hook->stolen_size)) {
         rc = -EBUSY;
         hook_rc = SUKISU_KPM_HOOK_RESERVED_TEXT;
+        goto err_free;
+    }
+    if (sukisu_kpm_bad_hook_target_range((unsigned long)func, hook->stolen_size)) {
+        rc = -EINVAL;
+        hook_rc = SUKISU_KPM_HOOK_BAD_ADDRESS;
         goto err_free;
     }
 
@@ -867,33 +980,108 @@ err_free:
     return hook_rc;
 }
 
-static int sukisu_kpm_unhook_locked(void *func)
+static int sukisu_kpm_unhook_locked(void *func, struct sukisu_kpm_inline_hook **retired)
 {
     struct sukisu_kpm_inline_hook *hook;
+    u8 expected[SUKISU_KPM_X86_MAX_STOLEN_SIZE];
     int rc;
+
+    if (retired)
+        *retired = NULL;
 
     hook = sukisu_kpm_find_inline_hook_locked(func);
     if (!hook)
         return -ENOENT;
 
-    if (hook->uses_text_poke_bp)
+    if (hook->uses_text_poke_bp) {
         rc = sukisu_kpm_restore_rel32_hook_bp(func, hook->original, hook->replace);
-    else
-        rc = sukisu_kpm_patch_bytes(func, hook->original, hook->patch_size);
+    } else {
+        memset(expected, 0x90, sizeof(expected));
+        sukisu_kpm_make_abs_jmp(expected, hook->replace);
+        rc = sukisu_kpm_patch_bytes_if_matches(func, expected, hook->original, hook->patch_size);
+    }
     if (rc)
         return rc;
 
     list_del(&hook->list);
+    sukisu_kpm_begin_owner_quiesce_locked(hook->owner);
     sukisu_kpm_module_ref_delta(hook->owner, SUKISU_KPM_REF_INLINE, -1);
-    sukisu_kpm_free_generated_exec(hook->trampoline, SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE,
-                                   true);
-    kfree(hook);
+    if (retired)
+        *retired = hook;
     return 0;
+}
+
+static bool sukisu_kpm_should_defer_owner_retire(struct sukisu_kpm_module *owner)
+{
+    if (!owner || READ_ONCE(owner->unloading) || sukisu_kpm_current_module() == owner)
+        return false;
+    return true;
+}
+
+static void sukisu_kpm_finish_inline_hook_retire(struct sukisu_kpm_inline_hook *hook)
+{
+    if (!hook)
+        return;
+
+    sukisu_kpm_free_generated_exec(hook->trampoline,
+                                   SUKISU_KPM_X86_MAX_STOLEN_SIZE + SUKISU_KPM_X86_JMP_ABS_SIZE, false);
+    sukisu_kpm_end_owner_quiesce(hook->owner);
+    kfree(hook);
+}
+
+static void sukisu_kpm_retire_inline_hook_work(struct work_struct *work)
+{
+    struct sukisu_kpm_inline_hook *hook = container_of(work, struct sukisu_kpm_inline_hook, retire_work);
+
+    sukisu_kpm_sync_before_exec_free();
+    sukisu_kpm_finish_inline_hook_retire(hook);
+}
+
+static void sukisu_kpm_retire_inline_hook_task_work(struct callback_head *work)
+{
+    struct sukisu_kpm_inline_hook *hook = container_of(work, struct sukisu_kpm_inline_hook, retire_task_work);
+
+    if (!schedule_work(&hook->retire_work))
+        pr_err("kpm: failed to queue inline hook retirement for %px; allocation retained\n", hook->func);
+}
+
+static void sukisu_kpm_retire_inline_hook(struct sukisu_kpm_inline_hook *hook, bool sync)
+{
+    if (!hook)
+        return;
+
+    if (sync && sukisu_kpm_should_defer_owner_retire(hook->owner)) {
+        if (task_work_add(current, &hook->retire_task_work, TWA_RESUME))
+            pr_err("kpm: failed to queue inline hook task retirement for %px; allocation retained\n", hook->func);
+        return;
+    }
+    if (sync)
+        sukisu_kpm_sync_before_exec_free();
+    sukisu_kpm_finish_inline_hook_retire(hook);
+}
+
+static void sukisu_kpm_retire_fp_hook_work(struct work_struct *work)
+{
+    struct sukisu_kpm_fp_hook *hook = container_of(work, struct sukisu_kpm_fp_hook, retire_work);
+
+    sukisu_kpm_sync_before_exec_free();
+    sukisu_kpm_end_owner_quiesce(hook->owner);
+    kfree(hook);
+}
+
+static void sukisu_kpm_retire_fp_hook_task_work(struct callback_head *work)
+{
+    struct sukisu_kpm_fp_hook *hook = container_of(work, struct sukisu_kpm_fp_hook, retire_task_work);
+
+    if (!schedule_work(&hook->retire_work))
+        pr_err("kpm: failed to queue function-pointer hook retirement for %px; record retained\n",
+               (void *)hook->fp_addr);
 }
 
 static int sukisu_kpm_hotpatch_nosync(void *addr, u32 value)
 {
-    if (sukisu_kpm_bad_kernel_addr((unsigned long)addr))
+    if (sukisu_kpm_bad_hook_target_range((unsigned long)addr, sizeof(value)) ||
+        sukisu_kpm_text_range_reserved(addr, sizeof(value)))
         return -EINVAL;
     return sukisu_kpm_patch_bytes(addr, &value, sizeof(value));
 }
@@ -914,9 +1102,18 @@ static int sukisu_kpm_hotpatch(void *addrs[], u32 values[], int cnt)
         return -ENOMEM;
 
     for (i = 0; i < cnt; i++) {
-        if (sukisu_kpm_bad_kernel_addr((unsigned long)addrs[i])) {
+        int j;
+
+        if (sukisu_kpm_bad_hook_target_range((unsigned long)addrs[i], sizeof(values[i])) ||
+            sukisu_kpm_text_range_reserved(addrs[i], sizeof(values[i]))) {
             rc = -EINVAL;
             goto out;
+        }
+        for (j = 0; j < i; j++) {
+            if (addrs[j] == addrs[i]) {
+                rc = -EINVAL;
+                goto out;
+            }
         }
         rc = copy_from_kernel_nofault(&old_values[i], addrs[i], sizeof(old_values[i]));
         if (rc)
@@ -924,14 +1121,15 @@ static int sukisu_kpm_hotpatch(void *addrs[], u32 values[], int cnt)
     }
 
     for (i = 0; i < cnt; i++) {
-        rc = sukisu_kpm_hotpatch_nosync(addrs[i], values[i]);
+        rc = sukisu_kpm_patch_bytes_if_matches(addrs[i], &old_values[i], &values[i], sizeof(values[i]));
         if (rc)
             break;
     }
 
     if (rc) {
         while (i-- > 0) {
-            int rollback_rc = sukisu_kpm_hotpatch_nosync(addrs[i], old_values[i]);
+            int rollback_rc =
+                sukisu_kpm_patch_bytes_if_matches(addrs[i], &values[i], &old_values[i], sizeof(old_values[i]));
 
             if (rollback_rc)
                 pr_err("kpm: hotpatch rollback failed for %px: %d\n", addrs[i], rollback_rc);
@@ -950,16 +1148,19 @@ static int sukisu_kpm_patch_function_pointer(unsigned long fp_addr, void *replac
 
     if (backup)
         *backup = NULL;
-    if (sukisu_kpm_bad_kernel_addr(fp_addr) || sukisu_kpm_bad_exec_addr((unsigned long)replace, false))
+    if (sukisu_kpm_bad_kernel_addr(fp_addr) || !IS_ALIGNED(fp_addr, sizeof(void *)) ||
+        sukisu_kpm_bad_exec_addr((unsigned long)replace, false))
         return -EINVAL;
 
     rc = copy_from_kernel_nofault(&origin, (void *)fp_addr, sizeof(origin));
     if (rc)
         return rc;
+    if (sukisu_kpm_bad_exec_addr((unsigned long)origin, false))
+        return -EINVAL;
     if (backup)
         *backup = origin;
 
-    return sukisu_kpm_patch_bytes((void *)fp_addr, &replace, sizeof(replace));
+    return sukisu_kpm_patch_pointer_if_matches(fp_addr, origin, replace);
 }
 
 static u64 sukisu_kpm_call_origin(void *origin, int argno, u64 *args)
@@ -1004,8 +1205,54 @@ static u64 sukisu_kpm_call_origin(void *origin, int argno, u64 *args)
     }
 }
 
-static u64 sukisu_kpm_wrap_dispatch_common(void *chain, atomic_t *active, bool *disabled, int argno, int max_items,
-                                           s8 *states, void **befores, void **afters, void **udata, void *origin,
+struct sukisu_kpm_chain_call {
+    sukisu_kpm_chain_callback_t callback;
+    struct sukisu_kpm_module *owner;
+    void *udata;
+};
+
+static bool sukisu_kpm_acquire_chain_call(s8 *state, void **callbacks, void **udata,
+                                          struct sukisu_kpm_module **owners,
+                                          struct sukisu_kpm_chain_call *call)
+{
+    bool acquired = false;
+
+    memset(call, 0, sizeof(*call));
+    rcu_read_lock();
+    if (smp_load_acquire(state) != SUKISU_KPM_CHAIN_ITEM_READY)
+        goto out;
+
+    call->callback = READ_ONCE(*callbacks);
+    call->owner = READ_ONCE(*owners);
+    call->udata = READ_ONCE(*udata);
+    if (!call->callback)
+        goto out;
+
+    if (call->owner)
+        atomic_inc(&call->owner->active_callbacks);
+
+    /* Pair with RETIRING publication in the removal path. */
+    if (unlikely(smp_load_acquire(state) != SUKISU_KPM_CHAIN_ITEM_READY)) {
+        if (call->owner)
+            atomic_dec(&call->owner->active_callbacks);
+        memset(call, 0, sizeof(*call));
+        goto out;
+    }
+    acquired = true;
+out:
+    rcu_read_unlock();
+    return acquired;
+}
+
+static void sukisu_kpm_release_chain_call(struct sukisu_kpm_chain_call *call)
+{
+    if (call->owner)
+        atomic_dec(&call->owner->active_callbacks);
+}
+
+static u64 sukisu_kpm_wrap_dispatch_common(void *chain, atomic_t *active, wait_queue_head_t *idle_wait,
+                                           bool *disabled, int argno, int max_items, s8 *states, void **befores,
+                                           void **afters, void **udata, struct sukisu_kpm_module **owners, void *origin,
                                            struct sukisu_kpm_hook_fargs12 *fargs)
 {
     int i;
@@ -1022,50 +1269,49 @@ static u64 sukisu_kpm_wrap_dispatch_common(void *chain, atomic_t *active, bool *
     memset(&fargs->local, 0, sizeof(fargs->local));
     fargs->ret = 0;
 
-    if (!READ_ONCE(*disabled)) {
+    if (!smp_load_acquire(disabled)) {
         for (i = 0; i < max_items; i++) {
-            sukisu_kpm_chain_callback_t before;
+            struct sukisu_kpm_chain_call call;
 
-            if (READ_ONCE(states[i]) != SUKISU_KPM_CHAIN_ITEM_READY)
+            if (!sukisu_kpm_acquire_chain_call(&states[i], &befores[i], &udata[i], &owners[i], &call))
                 continue;
-            before = READ_ONCE(befores[i]);
-            if (before)
-                before(fargs, READ_ONCE(udata[i]));
+            call.callback(fargs, call.udata);
+            sukisu_kpm_release_chain_call(&call);
         }
     }
 
     if (!fargs->skip_origin)
         fargs->ret = sukisu_kpm_call_origin(origin, argno, fargs->args);
 
-    if (!READ_ONCE(*disabled)) {
+    if (!smp_load_acquire(disabled)) {
         for (i = 0; i < max_items; i++) {
-            sukisu_kpm_chain_callback_t after;
+            struct sukisu_kpm_chain_call call;
 
-            if (READ_ONCE(states[i]) != SUKISU_KPM_CHAIN_ITEM_READY)
+            if (!sukisu_kpm_acquire_chain_call(&states[i], &afters[i], &udata[i], &owners[i], &call))
                 continue;
-            after = READ_ONCE(afters[i]);
-            if (after)
-                after(fargs, READ_ONCE(udata[i]));
+            call.callback(fargs, call.udata);
+            sukisu_kpm_release_chain_call(&call);
         }
     }
 
     ret = fargs->ret;
-    atomic_dec(active);
+    if (atomic_dec_and_test(active))
+        wake_up_all(idle_wait);
     return ret;
 }
 
 static u64 sukisu_kpm_wrap_dispatch(struct sukisu_kpm_wrap_chain *chain, struct sukisu_kpm_hook_fargs12 *fargs)
 {
-    return sukisu_kpm_wrap_dispatch_common(chain, &chain->active, &chain->disabled, chain->argno,
+    return sukisu_kpm_wrap_dispatch_common(chain, &chain->active, &chain->idle_wait, &chain->disabled, chain->argno,
                                            SUKISU_KPM_HOOK_CHAIN_NUM, chain->states, chain->befores, chain->afters,
-                                           chain->udata, (void *)chain->hook.relo_addr, fargs);
+                                           chain->udata, chain->owners, (void *)chain->hook.relo_addr, fargs);
 }
 
 static u64 sukisu_kpm_fp_wrap_dispatch(struct sukisu_kpm_fp_wrap_chain *chain, struct sukisu_kpm_hook_fargs12 *fargs)
 {
-    return sukisu_kpm_wrap_dispatch_common(chain, &chain->active, &chain->disabled, chain->argno,
+    return sukisu_kpm_wrap_dispatch_common(chain, &chain->active, &chain->idle_wait, &chain->disabled, chain->argno,
                                            SUKISU_KPM_FP_HOOK_CHAIN_NUM, chain->states, chain->befores, chain->afters,
-                                           chain->udata, (void *)chain->hook.origin_fp, fargs);
+                                           chain->udata, chain->owners, (void *)chain->hook.origin_fp, fargs);
 }
 
 static void sukisu_kpm_emit1(u8 **p, u8 value)
@@ -1234,18 +1480,22 @@ static int sukisu_kpm_add_chain_item(s8 *states, struct sukisu_kpm_module **owne
     WRITE_ONCE(afters[empty], after);
     WRITE_ONCE(udata[empty], data);
     WRITE_ONCE(owners[empty], owner);
-    smp_wmb();
-    WRITE_ONCE(states[empty], SUKISU_KPM_CHAIN_ITEM_READY);
+    smp_store_release(&states[empty], SUKISU_KPM_CHAIN_ITEM_READY);
     sukisu_kpm_module_ref_delta(owner, kind, 1);
     return SUKISU_KPM_HOOK_NO_ERR;
 }
 
 static bool sukisu_kpm_remove_chain_item(s8 *states, struct sukisu_kpm_module **owners, int max_items, void **befores,
                                          void **afters, void **udata, void *before, void *after,
-                                         enum sukisu_kpm_ref_kind kind)
+                                         enum sukisu_kpm_ref_kind kind, struct sukisu_kpm_module **retired_owner,
+                                         int *retired_index)
 {
-    bool removed = false;
     int i;
+
+    if (retired_owner)
+        *retired_owner = NULL;
+    if (retired_index)
+        *retired_index = -1;
 
     for (i = 0; i < max_items; i++) {
         if (READ_ONCE(states[i]) != SUKISU_KPM_CHAIN_ITEM_READY)
@@ -1253,17 +1503,32 @@ static bool sukisu_kpm_remove_chain_item(s8 *states, struct sukisu_kpm_module **
         if (READ_ONCE(befores[i]) != before || READ_ONCE(afters[i]) != after)
             continue;
 
-        WRITE_ONCE(states[i], SUKISU_KPM_CHAIN_ITEM_EMPTY);
-        smp_wmb();
+        if (retired_owner)
+            *retired_owner = READ_ONCE(owners[i]);
+        if (retired_index)
+            *retired_index = i;
+        sukisu_kpm_begin_owner_quiesce_locked(READ_ONCE(owners[i]));
+        smp_store_release(&states[i], SUKISU_KPM_CHAIN_ITEM_RETIRING);
         sukisu_kpm_module_ref_delta(READ_ONCE(owners[i]), kind, -1);
-        WRITE_ONCE(befores[i], NULL);
-        WRITE_ONCE(afters[i], NULL);
-        WRITE_ONCE(udata[i], NULL);
-        WRITE_ONCE(owners[i], NULL);
-        removed = true;
+        return true;
     }
 
-    return removed;
+    return false;
+}
+
+static void sukisu_kpm_finish_chain_item_locked(s8 *states, struct sukisu_kpm_module **owners, void **befores,
+                                                void **afters, void **udata, int index,
+                                                struct sukisu_kpm_module *retired_owner)
+{
+    if (index < 0 || smp_load_acquire(&states[index]) != SUKISU_KPM_CHAIN_ITEM_RETIRING)
+        return;
+
+    WRITE_ONCE(befores[index], NULL);
+    WRITE_ONCE(afters[index], NULL);
+    WRITE_ONCE(udata[index], NULL);
+    WRITE_ONCE(owners[index], NULL);
+    smp_store_release(&states[index], SUKISU_KPM_CHAIN_ITEM_EMPTY);
+    sukisu_kpm_end_owner_quiesce_locked(retired_owner);
 }
 
 static bool sukisu_kpm_has_chain_items(s8 *states, int max_items)
@@ -1271,17 +1536,92 @@ static bool sukisu_kpm_has_chain_items(s8 *states, int max_items)
     int i;
 
     for (i = 0; i < max_items; i++) {
-        if (READ_ONCE(states[i]) == SUKISU_KPM_CHAIN_ITEM_READY)
+        if (smp_load_acquire(&states[i]) != SUKISU_KPM_CHAIN_ITEM_EMPTY)
             return true;
     }
 
     return false;
 }
 
-static void sukisu_kpm_wait_chain_idle(atomic_t *active)
+static void sukisu_kpm_wait_chain_idle(atomic_t *active, wait_queue_head_t *idle_wait)
 {
-    while (atomic_read(active))
-        cpu_relax();
+    wait_event(*idle_wait, !atomic_read(active));
+}
+
+static void sukisu_kpm_retire_wrap_chain_work(struct work_struct *work)
+{
+    struct sukisu_kpm_wrap_chain *chain = container_of(work, struct sukisu_kpm_wrap_chain, retire_work);
+
+    sukisu_kpm_sync_before_exec_free();
+    sukisu_kpm_wait_chain_idle(&chain->active, &chain->idle_wait);
+    sukisu_kpm_retire_inline_hook(chain->retired_hook, false);
+    sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
+    kfree(chain);
+}
+
+static void sukisu_kpm_retire_fp_wrap_chain_work(struct work_struct *work)
+{
+    struct sukisu_kpm_fp_wrap_chain *chain = container_of(work, struct sukisu_kpm_fp_wrap_chain, retire_work);
+
+    sukisu_kpm_sync_before_exec_free();
+    sukisu_kpm_wait_chain_idle(&chain->active, &chain->idle_wait);
+    sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
+    kfree(chain);
+}
+
+static void sukisu_kpm_retire_syscall_wrap_chain_work(struct work_struct *work)
+{
+    struct sukisu_kpm_syscall_wrap_chain *chain =
+        container_of(work, struct sukisu_kpm_syscall_wrap_chain, retire_work);
+
+    sukisu_kpm_sync_before_exec_free();
+    sukisu_kpm_wait_chain_idle(&chain->active, &chain->idle_wait);
+    sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
+    kfree(chain);
+}
+
+static void sukisu_kpm_retire_wrap_chain(struct sukisu_kpm_wrap_chain *chain,
+                                         struct sukisu_kpm_inline_hook *retired_hook)
+{
+    sukisu_kpm_sync_before_exec_free();
+    if (atomic_read(&chain->active)) {
+        chain->retired_hook = retired_hook;
+        if (!schedule_work(&chain->retire_work))
+            pr_err("kpm: failed to queue inline wrapper retirement for %px; allocation retained\n",
+                   (void *)(unsigned long)chain->hook.func_addr);
+        return;
+    }
+
+    sukisu_kpm_retire_inline_hook(retired_hook, false);
+    sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
+    kfree(chain);
+}
+
+static void sukisu_kpm_retire_fp_wrap_chain(struct sukisu_kpm_fp_wrap_chain *chain)
+{
+    sukisu_kpm_sync_before_exec_free();
+    if (atomic_read(&chain->active)) {
+        if (!schedule_work(&chain->retire_work))
+            pr_err("kpm: failed to queue function-pointer wrapper retirement for %px; allocation retained\n",
+                   (void *)chain->hook.fp_addr);
+        return;
+    }
+
+    sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
+    kfree(chain);
+}
+
+static void sukisu_kpm_retire_syscall_wrap_chain(struct sukisu_kpm_syscall_wrap_chain *chain)
+{
+    sukisu_kpm_sync_before_exec_free();
+    if (atomic_read(&chain->active)) {
+        if (!schedule_work(&chain->retire_work))
+            pr_err("kpm: failed to queue syscall wrapper retirement for nr=%d; allocation retained\n", chain->nr);
+        return;
+    }
+
+    sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
+    kfree(chain);
 }
 
 static struct sukisu_kpm_wrap_chain *sukisu_kpm_find_wrap_chain_locked(void *func)
@@ -1412,15 +1752,15 @@ static u64 sukisu_kpm_syscall_wrap_dispatch(struct sukisu_kpm_syscall_wrap_chain
     fargs.chain = chain;
     sukisu_kpm_syscall_regs_to_args(regs, fargs.args);
 
-    if (!READ_ONCE(chain->disabled)) {
+    if (!smp_load_acquire(&chain->disabled)) {
         for (i = 0; i < SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM; i++) {
-            sukisu_kpm_chain_callback_t before;
+            struct sukisu_kpm_chain_call call;
 
-            if (READ_ONCE(chain->states[i]) != SUKISU_KPM_CHAIN_ITEM_READY)
+            if (!sukisu_kpm_acquire_chain_call(&chain->states[i], &chain->befores[i],
+                                               &chain->udata[i], &chain->owners[i], &call))
                 continue;
-            before = READ_ONCE(chain->befores[i]);
-            if (before)
-                before(&fargs, READ_ONCE(chain->udata[i]));
+            call.callback(&fargs, call.udata);
+            sukisu_kpm_release_chain_call(&call);
         }
     }
 
@@ -1429,20 +1769,21 @@ static u64 sukisu_kpm_syscall_wrap_dispatch(struct sukisu_kpm_syscall_wrap_chain
         fargs.ret = ((long (*)(const struct pt_regs *))chain->origin)(regs);
     }
 
-    if (!READ_ONCE(chain->disabled)) {
+    if (!smp_load_acquire(&chain->disabled)) {
         for (i = 0; i < SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM; i++) {
-            sukisu_kpm_chain_callback_t after;
+            struct sukisu_kpm_chain_call call;
 
-            if (READ_ONCE(chain->states[i]) != SUKISU_KPM_CHAIN_ITEM_READY)
+            if (!sukisu_kpm_acquire_chain_call(&chain->states[i], &chain->afters[i],
+                                               &chain->udata[i], &chain->owners[i], &call))
                 continue;
-            after = READ_ONCE(chain->afters[i]);
-            if (after)
-                after(&fargs, READ_ONCE(chain->udata[i]));
+            call.callback(&fargs, call.udata);
+            sukisu_kpm_release_chain_call(&call);
         }
     }
 
     ret = fargs.ret;
-    atomic_dec(&chain->active);
+    if (atomic_dec_and_test(&chain->active))
+        wake_up_all(&chain->idle_wait);
     return ret;
 }
 
@@ -1524,6 +1865,8 @@ static int sukisu_kpm_syscall_wrap(int nr, int narg, int is_compat, void *before
     chain->slot_addr = (unsigned long)slot;
     chain->owner = sukisu_kpm_current_module();
     atomic_set(&chain->active, 0);
+    init_waitqueue_head(&chain->idle_wait);
+    INIT_WORK(&chain->retire_work, sukisu_kpm_retire_syscall_wrap_chain_work);
     chain->stub = sukisu_kpm_make_syscall_wrap_stub(chain);
     if (!chain->stub) {
         kfree(chain);
@@ -1540,7 +1883,7 @@ static int sukisu_kpm_syscall_wrap(int nr, int narg, int is_compat, void *before
     }
 
     chain->origin = origin;
-    rc = sukisu_kpm_patch_bytes(slot, &chain->stub, sizeof(chain->stub));
+    rc = sukisu_kpm_patch_pointer_if_matches((unsigned long)slot, origin, chain->stub);
     if (rc) {
         sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
         kfree(chain);
@@ -1556,13 +1899,14 @@ add_item:
                                    chain->afters, chain->udata, before, after, udata, sukisu_kpm_current_module(),
                                    SUKISU_KPM_REF_SYSCALL_WRAP);
     if (rc && created) {
-        WRITE_ONCE(chain->disabled, true);
-        sukisu_kpm_patch_bytes((void *)chain->slot_addr, &origin, sizeof(origin));
-        list_del(&chain->list);
-        sukisu_kpm_sync_before_exec_free();
-        sukisu_kpm_wait_chain_idle(&chain->active);
-        sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
-        kfree(chain);
+        smp_store_release(&chain->disabled, true);
+        if (!sukisu_kpm_patch_pointer_if_matches(chain->slot_addr, chain->stub, origin)) {
+            list_del(&chain->list);
+            mutex_unlock(&sukisu_kpm_hook_lock);
+            sukisu_kpm_retire_syscall_wrap_chain(chain);
+            return rc;
+        }
+        smp_store_release(&chain->disabled, false);
     }
     mutex_unlock(&sukisu_kpm_hook_lock);
     return rc;
@@ -1571,8 +1915,11 @@ add_item:
 static void sukisu_kpm_syscall_unwrap(int nr, int is_compat, void *before, void *after)
 {
     struct sukisu_kpm_syscall_wrap_chain *chain;
-    void *origin;
+    struct sukisu_kpm_module *retired_owner = NULL;
+    bool retire_chain = false;
     bool removed;
+    int retired_index = -1;
+    int rc = 0;
 
     if (is_compat)
         return;
@@ -1586,28 +1933,36 @@ static void sukisu_kpm_syscall_unwrap(int nr, int is_compat, void *before, void 
 
     removed =
         sukisu_kpm_remove_chain_item(chain->states, chain->owners, SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM, chain->befores,
-                                     chain->afters, chain->udata, before, after, SUKISU_KPM_REF_SYSCALL_WRAP);
+                                     chain->afters, chain->udata, before, after, SUKISU_KPM_REF_SYSCALL_WRAP,
+                                     &retired_owner, &retired_index);
     if (!removed) {
         mutex_unlock(&sukisu_kpm_hook_lock);
         return;
     }
+    mutex_unlock(&sukisu_kpm_hook_lock);
 
+    sukisu_kpm_sync_before_exec_free();
+
+    mutex_lock(&sukisu_kpm_hook_lock);
+    sukisu_kpm_finish_chain_item_locked(chain->states, chain->owners, chain->befores, chain->afters, chain->udata,
+                                        retired_index, retired_owner);
     if (sukisu_kpm_has_chain_items(chain->states, SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM)) {
-        sukisu_kpm_wait_chain_idle(&chain->active);
         mutex_unlock(&sukisu_kpm_hook_lock);
         return;
     }
-
-    WRITE_ONCE(chain->disabled, true);
-    origin = chain->origin;
-    if (!sukisu_kpm_patch_bytes((void *)chain->slot_addr, &origin, sizeof(origin))) {
+    smp_store_release(&chain->disabled, true);
+    rc = sukisu_kpm_patch_pointer_if_matches(chain->slot_addr, chain->stub, chain->origin);
+    if (!rc) {
         list_del(&chain->list);
-        sukisu_kpm_sync_before_exec_free();
-        sukisu_kpm_wait_chain_idle(&chain->active);
-        sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
-        kfree(chain);
-    }
+        retire_chain = true;
+    } else
+        smp_store_release(&chain->disabled, false);
     mutex_unlock(&sukisu_kpm_hook_lock);
+
+    if (retire_chain)
+        sukisu_kpm_retire_syscall_wrap_chain(chain);
+    else if (rc)
+        pr_warn("kpm: syscall unwrap restore refused for nr=%d: %d\n", nr, rc);
 }
 
 static unsigned long sukisu_kpm_syscalln_addr(int nr, int is_compat)
@@ -1703,13 +2058,15 @@ static void sukisu_kpm_hook_install(void *hook)
 static void sukisu_kpm_hook_uninstall(void *hook)
 {
     struct sukisu_kpm_kp_hook *kp_hook = hook;
+    struct sukisu_kpm_inline_hook *retired = NULL;
 
     if (!kp_hook)
         return;
 
     mutex_lock(&sukisu_kpm_hook_lock);
-    sukisu_kpm_unhook_locked((void *)kp_hook->func_addr);
+    sukisu_kpm_unhook_locked((void *)kp_hook->func_addr, &retired);
     mutex_unlock(&sukisu_kpm_hook_lock);
+    sukisu_kpm_retire_inline_hook(retired, true);
 }
 
 static int sukisu_kpm_hook(void *func, void *replace, void **backup)
@@ -1724,13 +2081,16 @@ static int sukisu_kpm_hook(void *func, void *replace, void **backup)
 
 static void sukisu_kpm_unhook(void *func)
 {
+    struct sukisu_kpm_inline_hook *retired = NULL;
     int rc;
 
     mutex_lock(&sukisu_kpm_hook_lock);
-    rc = sukisu_kpm_unhook_locked(func);
+    rc = sukisu_kpm_unhook_locked(func, &retired);
     mutex_unlock(&sukisu_kpm_hook_lock);
 
-    if (rc)
+    if (!rc)
+        sukisu_kpm_retire_inline_hook(retired, true);
+    else
         pr_warn("kpm: x86_64 unhook failed for %px: %d\n", func, rc);
 }
 
@@ -1754,8 +2114,10 @@ static int sukisu_kpm_hook_chain_add(void *chain, void *before, void *after, voi
 
 static void sukisu_kpm_hook_chain_remove(void *chain, void *before, void *after)
 {
+    struct sukisu_kpm_module *retired_owner = NULL;
     struct sukisu_kpm_wrap_chain *wrap;
     bool removed;
+    int retired_index = -1;
 
     mutex_lock(&sukisu_kpm_hook_lock);
     wrap = sukisu_kpm_find_wrap_chain_by_chain_locked(chain);
@@ -1765,16 +2127,25 @@ static void sukisu_kpm_hook_chain_remove(void *chain, void *before, void *after)
     }
 
     removed = sukisu_kpm_remove_chain_item(wrap->states, wrap->owners, SUKISU_KPM_HOOK_CHAIN_NUM, wrap->befores,
-                                           wrap->afters, wrap->udata, before, after, SUKISU_KPM_REF_WRAP);
-    if (removed)
-        sukisu_kpm_wait_chain_idle(&wrap->active);
+                                           wrap->afters, wrap->udata, before, after, SUKISU_KPM_REF_WRAP,
+                                           &retired_owner, &retired_index);
     mutex_unlock(&sukisu_kpm_hook_lock);
+
+    if (removed) {
+        sukisu_kpm_sync_before_exec_free();
+        mutex_lock(&sukisu_kpm_hook_lock);
+        sukisu_kpm_finish_chain_item_locked(wrap->states, wrap->owners, wrap->befores, wrap->afters, wrap->udata,
+                                            retired_index, retired_owner);
+        mutex_unlock(&sukisu_kpm_hook_lock);
+    }
 }
 
 static int sukisu_kpm_hook_wrap(void *func, int argno, void *before, void *after, void *udata)
 {
     struct sukisu_kpm_wrap_chain *chain;
+    struct sukisu_kpm_inline_hook *retired_hook = NULL;
     bool created = false;
+    bool retire_chain = false;
     void *backup = NULL;
     int rc;
 
@@ -1801,6 +2172,8 @@ static int sukisu_kpm_hook_wrap(void *func, int argno, void *before, void *after
     chain->argno = argno;
     chain->owner = sukisu_kpm_current_module();
     atomic_set(&chain->active, 0);
+    init_waitqueue_head(&chain->idle_wait);
+    INIT_WORK(&chain->retire_work, sukisu_kpm_retire_wrap_chain_work);
     chain->stub = sukisu_kpm_make_wrap_stub(chain, argno, sukisu_kpm_wrap_dispatch);
     if (!chain->stub) {
         kfree(chain);
@@ -1828,21 +2201,30 @@ add_item:
                                    chain->afters, chain->udata, before, after, udata, sukisu_kpm_current_module(),
                                    SUKISU_KPM_REF_WRAP);
     if (rc && created) {
-        WRITE_ONCE(chain->disabled, true);
-        sukisu_kpm_unhook_locked(func);
-        list_del(&chain->list);
-        sukisu_kpm_wait_chain_idle(&chain->active);
-        sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
-        kfree(chain);
+        smp_store_release(&chain->disabled, true);
+        if (!sukisu_kpm_unhook_locked(func, &retired_hook)) {
+            list_del(&chain->list);
+            retire_chain = true;
+        } else {
+            smp_store_release(&chain->disabled, false);
+        }
     }
     mutex_unlock(&sukisu_kpm_hook_lock);
+
+    if (retire_chain)
+        sukisu_kpm_retire_wrap_chain(chain, retired_hook);
     return rc;
 }
 
 static void sukisu_kpm_hook_unwrap_remove(void *func, void *before, void *after, int remove)
 {
     struct sukisu_kpm_wrap_chain *chain;
+    struct sukisu_kpm_inline_hook *retired_hook = NULL;
+    struct sukisu_kpm_module *retired_owner = NULL;
+    bool retire_chain = false;
     bool removed;
+    int retired_index = -1;
+    int rc = 0;
 
     mutex_lock(&sukisu_kpm_hook_lock);
     chain = sukisu_kpm_find_wrap_chain_locked(func);
@@ -1852,26 +2234,37 @@ static void sukisu_kpm_hook_unwrap_remove(void *func, void *before, void *after,
     }
 
     removed = sukisu_kpm_remove_chain_item(chain->states, chain->owners, SUKISU_KPM_HOOK_CHAIN_NUM, chain->befores,
-                                           chain->afters, chain->udata, before, after, SUKISU_KPM_REF_WRAP);
+                                           chain->afters, chain->udata, before, after, SUKISU_KPM_REF_WRAP,
+                                           &retired_owner, &retired_index);
     if (!removed) {
         mutex_unlock(&sukisu_kpm_hook_lock);
         return;
     }
 
+    mutex_unlock(&sukisu_kpm_hook_lock);
+
+    sukisu_kpm_sync_before_exec_free();
+
+    mutex_lock(&sukisu_kpm_hook_lock);
+    sukisu_kpm_finish_chain_item_locked(chain->states, chain->owners, chain->befores, chain->afters, chain->udata,
+                                        retired_index, retired_owner);
     if (!remove || sukisu_kpm_has_chain_items(chain->states, SUKISU_KPM_HOOK_CHAIN_NUM)) {
-        sukisu_kpm_wait_chain_idle(&chain->active);
         mutex_unlock(&sukisu_kpm_hook_lock);
         return;
     }
-
-    WRITE_ONCE(chain->disabled, true);
-    if (!sukisu_kpm_unhook_locked(func)) {
+    smp_store_release(&chain->disabled, true);
+    rc = sukisu_kpm_unhook_locked(func, &retired_hook);
+    if (!rc) {
         list_del(&chain->list);
-        sukisu_kpm_wait_chain_idle(&chain->active);
-        sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
-        kfree(chain);
-    }
+        retire_chain = true;
+    } else
+        smp_store_release(&chain->disabled, false);
     mutex_unlock(&sukisu_kpm_hook_lock);
+
+    if (retire_chain)
+        sukisu_kpm_retire_wrap_chain(chain, retired_hook);
+    else if (rc)
+        pr_warn("kpm: x86_64 unwrap restore refused for %px: %d\n", func, rc);
 }
 
 static void sukisu_kpm_fp_hook(unsigned long fp_addr, void *replace, void **backup)
@@ -1888,9 +2281,11 @@ static void sukisu_kpm_fp_hook(unsigned long fp_addr, void *replace, void **back
         pr_warn("kpm: x86_64 fp_hook failed for %px: %d\n", (void *)fp_addr, -ENOMEM);
         return;
     }
+    INIT_WORK(&hook->retire_work, sukisu_kpm_retire_fp_hook_work);
+    init_task_work(&hook->retire_task_work, sukisu_kpm_retire_fp_hook_task_work);
 
     mutex_lock(&sukisu_kpm_hook_lock);
-    if (sukisu_kpm_find_fp_hook_locked(fp_addr, NULL)) {
+    if (sukisu_kpm_find_fp_hook_locked(fp_addr, NULL) || sukisu_kpm_find_fp_wrap_chain_locked(fp_addr)) {
         mutex_unlock(&sukisu_kpm_hook_lock);
         kfree(hook);
         pr_warn("kpm: x86_64 fp_hook duplicate for %px\n", (void *)fp_addr);
@@ -1932,7 +2327,7 @@ static void sukisu_kpm_fp_unhook(unsigned long fp_addr, void *backup)
         return;
     }
 
-    rc = sukisu_kpm_patch_bytes((void *)fp_addr, &backup, sizeof(backup));
+    rc = sukisu_kpm_patch_pointer_if_matches(fp_addr, hook->replace, backup);
     if (rc) {
         mutex_unlock(&sukisu_kpm_hook_lock);
         pr_warn("kpm: x86_64 fp_unhook failed for %px: %d\n", (void *)fp_addr, rc);
@@ -1940,8 +2335,18 @@ static void sukisu_kpm_fp_unhook(unsigned long fp_addr, void *backup)
     }
 
     list_del(&hook->list);
+    sukisu_kpm_begin_owner_quiesce_locked(hook->owner);
     sukisu_kpm_module_ref_delta(hook->owner, SUKISU_KPM_REF_FP, -1);
     mutex_unlock(&sukisu_kpm_hook_lock);
+
+    if (sukisu_kpm_should_defer_owner_retire(hook->owner)) {
+        if (task_work_add(current, &hook->retire_task_work, TWA_RESUME))
+            pr_err("kpm: failed to queue function-pointer hook task retirement for %px; record retained\n",
+                   (void *)fp_addr);
+        return;
+    }
+    sukisu_kpm_sync_before_exec_free();
+    sukisu_kpm_end_owner_quiesce(hook->owner);
     kfree(hook);
 }
 
@@ -1949,6 +2354,7 @@ static int sukisu_kpm_fp_hook_wrap(unsigned long fp_addr, int argno, void *befor
 {
     struct sukisu_kpm_fp_wrap_chain *chain;
     bool created = false;
+    bool retire_chain = false;
     void *backup = NULL;
     int rc;
 
@@ -1956,6 +2362,10 @@ static int sukisu_kpm_fp_hook_wrap(unsigned long fp_addr, int argno, void *befor
         return SUKISU_KPM_HOOK_BAD_ADDRESS;
 
     mutex_lock(&sukisu_kpm_hook_lock);
+    if (sukisu_kpm_find_fp_hook_locked(fp_addr, NULL)) {
+        mutex_unlock(&sukisu_kpm_hook_lock);
+        return SUKISU_KPM_HOOK_DUPLICATED;
+    }
     chain = sukisu_kpm_find_fp_wrap_chain_locked(fp_addr);
     if (chain) {
         if (chain->argno != argno) {
@@ -1975,6 +2385,8 @@ static int sukisu_kpm_fp_hook_wrap(unsigned long fp_addr, int argno, void *befor
     chain->argno = argno;
     chain->owner = sukisu_kpm_current_module();
     atomic_set(&chain->active, 0);
+    init_waitqueue_head(&chain->idle_wait);
+    INIT_WORK(&chain->retire_work, sukisu_kpm_retire_fp_wrap_chain_work);
     chain->stub = sukisu_kpm_make_wrap_stub(chain, argno, sukisu_kpm_fp_wrap_dispatch);
     if (!chain->stub) {
         kfree(chain);
@@ -2001,23 +2413,29 @@ add_item:
                                    chain->afters, chain->udata, before, after, udata, sukisu_kpm_current_module(),
                                    SUKISU_KPM_REF_FP_WRAP);
     if (rc && created) {
-        WRITE_ONCE(chain->disabled, true);
-        sukisu_kpm_patch_bytes((void *)fp_addr, &backup, sizeof(backup));
-        list_del(&chain->list);
-        sukisu_kpm_sync_before_exec_free();
-        sukisu_kpm_wait_chain_idle(&chain->active);
-        sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
-        kfree(chain);
+        smp_store_release(&chain->disabled, true);
+        if (!sukisu_kpm_patch_pointer_if_matches(fp_addr, chain->stub, backup)) {
+            list_del(&chain->list);
+            retire_chain = true;
+        } else {
+            smp_store_release(&chain->disabled, false);
+        }
     }
     mutex_unlock(&sukisu_kpm_hook_lock);
+
+    if (retire_chain)
+        sukisu_kpm_retire_fp_wrap_chain(chain);
     return rc;
 }
 
 static void sukisu_kpm_fp_hook_unwrap(unsigned long fp_addr, void *before, void *after)
 {
     struct sukisu_kpm_fp_wrap_chain *chain;
-    void *backup;
+    struct sukisu_kpm_module *retired_owner = NULL;
+    bool retire_chain = false;
     bool removed;
+    int retired_index = -1;
+    int rc = 0;
 
     mutex_lock(&sukisu_kpm_hook_lock);
     chain = sukisu_kpm_find_fp_wrap_chain_locked(fp_addr);
@@ -2027,28 +2445,37 @@ static void sukisu_kpm_fp_hook_unwrap(unsigned long fp_addr, void *before, void 
     }
 
     removed = sukisu_kpm_remove_chain_item(chain->states, chain->owners, SUKISU_KPM_FP_HOOK_CHAIN_NUM, chain->befores,
-                                           chain->afters, chain->udata, before, after, SUKISU_KPM_REF_FP_WRAP);
+                                           chain->afters, chain->udata, before, after, SUKISU_KPM_REF_FP_WRAP,
+                                           &retired_owner, &retired_index);
     if (!removed) {
         mutex_unlock(&sukisu_kpm_hook_lock);
         return;
     }
 
+    mutex_unlock(&sukisu_kpm_hook_lock);
+
+    sukisu_kpm_sync_before_exec_free();
+
+    mutex_lock(&sukisu_kpm_hook_lock);
+    sukisu_kpm_finish_chain_item_locked(chain->states, chain->owners, chain->befores, chain->afters, chain->udata,
+                                        retired_index, retired_owner);
     if (sukisu_kpm_has_chain_items(chain->states, SUKISU_KPM_FP_HOOK_CHAIN_NUM)) {
-        sukisu_kpm_wait_chain_idle(&chain->active);
         mutex_unlock(&sukisu_kpm_hook_lock);
         return;
     }
-
-    WRITE_ONCE(chain->disabled, true);
-    backup = (void *)chain->hook.origin_fp;
-    if (!sukisu_kpm_patch_bytes((void *)fp_addr, &backup, sizeof(backup))) {
+    smp_store_release(&chain->disabled, true);
+    rc = sukisu_kpm_patch_pointer_if_matches(fp_addr, chain->stub, (void *)chain->hook.origin_fp);
+    if (!rc) {
         list_del(&chain->list);
-        sukisu_kpm_sync_before_exec_free();
-        sukisu_kpm_wait_chain_idle(&chain->active);
-        sukisu_kpm_free_generated_exec(chain->stub, SUKISU_KPM_X86_WRAP_STUB_SIZE, false);
-        kfree(chain);
-    }
+        retire_chain = true;
+    } else
+        smp_store_release(&chain->disabled, false);
     mutex_unlock(&sukisu_kpm_hook_lock);
+
+    if (retire_chain)
+        sukisu_kpm_retire_fp_wrap_chain(chain);
+    else if (rc)
+        pr_warn("kpm: x86_64 fp unwrap restore refused for %px: %d\n", (void *)fp_addr, rc);
 }
 
 static int sukisu_kpm_branch_unsupported(void)
@@ -2212,15 +2639,49 @@ static int sukisu_kpm_find_sec(const struct sukisu_kpm_load_info *info, const ch
     return 0;
 }
 
-static long sukisu_kpm_get_offset(unsigned int *size, const Elf_Shdr *sechdr)
+static bool sukisu_kpm_string_in_table(const char *table, size_t table_size, size_t offset)
 {
-    unsigned int align;
-    long ret;
+    if (!table || offset >= table_size)
+        return false;
 
-    align = sechdr->sh_addralign ? sechdr->sh_addralign : 1;
-    ret = ALIGN(*size, align);
-    *size = ret + sechdr->sh_size;
-    return ret;
+    return memchr(table + offset, '\0', table_size - offset) != NULL;
+}
+
+static bool sukisu_kpm_file_ranges_overlap(u64 first_offset, u64 first_size, u64 second_offset, u64 second_size)
+{
+    return first_size && second_size && first_offset < second_offset + second_size &&
+           second_offset < first_offset + first_size;
+}
+
+static int sukisu_kpm_add_layout_size(unsigned int *size, const Elf_Shdr *sechdr, unsigned long *offset)
+{
+    u64 align = sechdr->sh_addralign ? sechdr->sh_addralign : 1;
+    u64 aligned;
+    u64 next;
+
+    if (check_add_overflow((u64)*size, align - 1, &aligned))
+        return -EOVERFLOW;
+    aligned &= ~(align - 1);
+    if (check_add_overflow(aligned, (u64)sechdr->sh_size, &next) || next > SUKISU_KPM_MAX_LOADED_SIZE)
+        return -EFBIG;
+
+    *offset = aligned;
+    *size = next;
+    return 0;
+}
+
+static int sukisu_kpm_page_align_layout(unsigned int *size)
+{
+    u64 aligned;
+
+    if (check_add_overflow((u64)*size, (u64)PAGE_SIZE - 1, &aligned))
+        return -EOVERFLOW;
+    aligned &= PAGE_MASK;
+    if (aligned > SUKISU_KPM_MAX_LOADED_SIZE)
+        return -EFBIG;
+
+    *size = aligned;
+    return 0;
 }
 
 static bool sukisu_kpm_reloc_uses_got(unsigned int type)
@@ -2251,8 +2712,11 @@ static int sukisu_kpm_count_got_relocations(struct sukisu_kpm_load_info *info)
         rel = (void *)info->sechdrs[i].sh_addr;
         nrels = info->sechdrs[i].sh_size / sizeof(*rel);
         for (j = 0; j < nrels; j++) {
-            if (sukisu_kpm_reloc_uses_got(ELF64_R_TYPE(rel[j].r_info)))
+            if (sukisu_kpm_reloc_uses_got(ELF64_R_TYPE(rel[j].r_info))) {
+                if (count >= SUKISU_KPM_MAX_LOADED_SIZE / sizeof(u64))
+                    return -EFBIG;
                 count++;
+            }
         }
     }
 
@@ -2260,7 +2724,7 @@ static int sukisu_kpm_count_got_relocations(struct sukisu_kpm_load_info *info)
     return 0;
 }
 
-static void sukisu_kpm_layout_sections(struct sukisu_kpm_module *mod, struct sukisu_kpm_load_info *info)
+static int sukisu_kpm_layout_sections(struct sukisu_kpm_module *mod, struct sukisu_kpm_load_info *info)
 {
     static const unsigned long masks[][2] = {
         { SHF_EXECINSTR | SHF_ALLOC, 0 },
@@ -2280,44 +2744,152 @@ static void sukisu_kpm_layout_sections(struct sukisu_kpm_module *mod, struct suk
             if ((s->sh_flags & masks[m][0]) != masks[m][0] || (s->sh_flags & masks[m][1]) || s->sh_entsize != ~0UL)
                 continue;
 
-            s->sh_entsize = sukisu_kpm_get_offset(&mod->size, s);
+            if (sukisu_kpm_add_layout_size(&mod->size, s, &s->sh_entsize))
+                return -EFBIG;
         }
 
+        if (sukisu_kpm_page_align_layout(&mod->size))
+            return -EFBIG;
         if (m == 0) {
-            mod->size = ALIGN(mod->size, PAGE_SIZE);
             mod->text_size = mod->size;
         } else if (m == 1) {
-            mod->size = ALIGN(mod->size, PAGE_SIZE);
             mod->ro_size = mod->size;
-        } else {
-            mod->size = ALIGN(mod->size, PAGE_SIZE);
         }
     }
 
     if (info->got_entries) {
+        u64 got_size;
+
+        if (check_mul_overflow((u64)info->got_entries, (u64)sizeof(u64), &got_size))
+            return -EOVERFLOW;
         mod->size = ALIGN(mod->size, sizeof(u64));
         info->got_offset = mod->size;
-        mod->size += info->got_entries * sizeof(u64);
-        mod->size = ALIGN(mod->size, PAGE_SIZE);
+        if (got_size > SUKISU_KPM_MAX_LOADED_SIZE - mod->size)
+            return -EFBIG;
+        mod->size += got_size;
+        if (sukisu_kpm_page_align_layout(&mod->size))
+            return -EFBIG;
     }
+
+    return mod->size ? 0 : -ENOEXEC;
 }
 
 static int sukisu_kpm_rewrite_section_headers(struct sukisu_kpm_load_info *info)
 {
+    const Elf_Shdr *shstr = &info->sechdrs[info->hdr->e_shstrndx];
+    u64 shdr_bytes = (u64)info->hdr->e_shnum * sizeof(Elf_Shdr);
     int i;
 
     info->sechdrs[0].sh_addr = 0;
     for (i = 1; i < info->hdr->e_shnum; i++) {
         Elf_Shdr *shdr = &info->sechdrs[i];
 
-        if (shdr->sh_name >= info->sechdrs[info->hdr->e_shstrndx].sh_size)
+        if (!sukisu_kpm_string_in_table(info->secstrings, shstr->sh_size, shdr->sh_name))
+            return -ENOEXEC;
+        if (shdr->sh_addralign > PAGE_SIZE ||
+            (shdr->sh_addralign && !is_power_of_2(shdr->sh_addralign)))
+            return -ENOEXEC;
+        if (shdr->sh_addralign > 1 && !IS_ALIGNED(shdr->sh_offset, shdr->sh_addralign))
+            return -ENOEXEC;
+        if ((shdr->sh_flags & (SHF_WRITE | SHF_EXECINSTR)) == (SHF_WRITE | SHF_EXECINSTR))
+            return -ENOEXEC;
+        if ((shdr->sh_flags & SHF_ALLOC) && shdr->sh_type != SHT_PROGBITS && shdr->sh_type != SHT_NOBITS)
+            return -ENOEXEC;
+        if (shdr->sh_type == SHT_NOBITS && (shdr->sh_flags & SHF_EXECINSTR))
+            return -ENOEXEC;
+        if ((shdr->sh_flags & SHF_ALLOC) &&
+            ((shdr->sh_flags & (SHF_COMPRESSED | SHF_TLS)) || shdr->sh_size > SUKISU_KPM_MAX_LOADED_SIZE))
             return -ENOEXEC;
 
         if (shdr->sh_type != SHT_NOBITS) {
+            int j;
+
             if (shdr->sh_offset > info->len || shdr->sh_size > info->len - shdr->sh_offset)
                 return -ENOEXEC;
+            if (sukisu_kpm_file_ranges_overlap(shdr->sh_offset, shdr->sh_size, 0, sizeof(*info->hdr)) ||
+                sukisu_kpm_file_ranges_overlap(shdr->sh_offset, shdr->sh_size, info->hdr->e_shoff, shdr_bytes))
+                return -ENOEXEC;
+            for (j = 1; j < i; j++) {
+                const Elf_Shdr *prev = &info->sechdrs[j];
+
+                if (prev->sh_type != SHT_NOBITS &&
+                    sukisu_kpm_file_ranges_overlap(shdr->sh_offset, shdr->sh_size, prev->sh_offset, prev->sh_size))
+                    return -ENOEXEC;
+            }
             shdr->sh_addr = (unsigned long)info->hdr + shdr->sh_offset;
+        } else if (shdr->sh_offset > info->len) {
+            return -ENOEXEC;
         }
+    }
+
+    return 0;
+}
+
+static bool sukisu_kpm_is_immutable_metadata_section(const char *name)
+{
+    return !strcmp(name, ".kpm.info") || !strcmp(name, ".kpm.init") || !strcmp(name, ".kpm.exit") ||
+           !strcmp(name, ".kpm.ctl0") || !strcmp(name, ".kpm.ctl1");
+}
+
+static int sukisu_kpm_validate_special_sections(const struct sukisu_kpm_load_info *info)
+{
+    static const struct {
+        const char *name;
+        size_t size;
+        bool required;
+    } special[] = {
+        { ".kpm.info", 0, true },
+        { ".kpm.init", sizeof(sukisu_kpm_initcall_t), true },
+        { ".kpm.exit", sizeof(sukisu_kpm_exitcall_t), true },
+        { ".kpm.ctl0", sizeof(sukisu_kpm_ctl0call_t), false },
+        { ".kpm.ctl1", sizeof(sukisu_kpm_ctl1call_t), false },
+    };
+    unsigned int counts[ARRAY_SIZE(special)] = { 0 };
+    int i;
+    int j;
+
+    for (i = 1; i < info->hdr->e_shnum; i++) {
+        const Elf_Shdr *shdr = &info->sechdrs[i];
+        const char *name;
+
+        if (!(shdr->sh_flags & SHF_ALLOC))
+            continue;
+        name = info->secstrings + shdr->sh_name;
+        for (j = 0; j < ARRAY_SIZE(special); j++) {
+            if (strcmp(name, special[j].name))
+                continue;
+            counts[j]++;
+            if (counts[j] > 1 || shdr->sh_type != SHT_PROGBITS ||
+                (special[j].size && shdr->sh_size != special[j].size))
+                return -ENOEXEC;
+        }
+    }
+
+    for (j = 0; j < ARRAY_SIZE(special); j++) {
+        if (special[j].required && counts[j] != 1)
+            return -ENOEXEC;
+    }
+    return 0;
+}
+
+static int sukisu_kpm_validate_metadata_string(const char *value, size_t max_len, bool module_name)
+{
+    size_t i;
+    size_t len;
+
+    if (!value)
+        return -ENOEXEC;
+    len = strlen(value);
+    if (!len || len > max_len)
+        return -ENOEXEC;
+
+    for (i = 0; i < len; i++) {
+        unsigned char c = value[i];
+
+        if (c < 0x20 || c == 0x7f)
+            return -ENOEXEC;
+        if (module_name && !isalnum(c) && c != '_' && c != '-' && c != '.')
+            return -ENOEXEC;
     }
 
     return 0;
@@ -2329,12 +2901,26 @@ static int sukisu_kpm_setup_load_info(struct sukisu_kpm_load_info *info)
     int rc;
     Elf_Shdr *info_sec;
 
-    info->sechdrs = (void *)info->hdr + info->hdr->e_shoff;
-    info->secstrings = (void *)info->hdr + info->sechdrs[info->hdr->e_shstrndx].sh_offset;
-
     rc = sukisu_kpm_rewrite_section_headers(info);
     if (rc)
         return rc;
+
+    for (i = 1; i < info->hdr->e_shnum; i++) {
+        Elf_Shdr *shdr = &info->sechdrs[i];
+        const char *name = info->secstrings + shdr->sh_name;
+
+        if (sukisu_kpm_is_immutable_metadata_section(name)) {
+            if (!(shdr->sh_flags & SHF_ALLOC) || (shdr->sh_flags & SHF_EXECINSTR))
+                return -ENOEXEC;
+            shdr->sh_flags &= ~SHF_WRITE;
+        }
+    }
+
+    rc = sukisu_kpm_validate_special_sections(info);
+    if (rc) {
+        pr_err("kpm: malformed or duplicate .kpm.* section\n");
+        return rc;
+    }
 
     if (!sukisu_kpm_find_sec(info, ".kpm.init") || !sukisu_kpm_find_sec(info, ".kpm.exit")) {
         pr_err("kpm: no .kpm.init or .kpm.exit section\n");
@@ -2348,7 +2934,8 @@ static int sukisu_kpm_setup_load_info(struct sukisu_kpm_load_info *info)
     }
 
     info_sec = &info->sechdrs[info->index.info];
-    if (!info_sec->sh_size || ((char *)info->hdr + info_sec->sh_offset)[info_sec->sh_size - 1]) {
+    if (!info_sec->sh_size || info_sec->sh_size > SUKISU_KPM_MAX_MODINFO_SIZE ||
+        ((char *)info->hdr + info_sec->sh_offset)[info_sec->sh_size - 1]) {
         pr_err("kpm: .kpm.info is not NUL-terminated\n");
         return -ENOEXEC;
     }
@@ -2361,10 +2948,15 @@ static int sukisu_kpm_setup_load_info(struct sukisu_kpm_load_info *info)
     info->info.author = sukisu_kpm_get_modinfo(info, "author");
     info->info.description = sukisu_kpm_get_modinfo(info, "description");
 
-    if (!info->info.name || !info->info.version) {
+    if (sukisu_kpm_validate_metadata_string(info->info.name, SUKISU_KPM_MAX_NAME_LEN, true) ||
+        sukisu_kpm_validate_metadata_string(info->info.version, SUKISU_KPM_MAX_VERSION_LEN, false)) {
         pr_err("kpm: module name/version not found\n");
         return -ENOEXEC;
     }
+    if ((info->info.license && sukisu_kpm_validate_metadata_string(info->info.license, 255, false)) ||
+        (info->info.author && sukisu_kpm_validate_metadata_string(info->info.author, 255, false)) ||
+        (info->info.description && sukisu_kpm_validate_metadata_string(info->info.description, 2047, false)))
+        return -ENOEXEC;
 
     for (i = 1; i < info->hdr->e_shnum; i++) {
         if (info->sechdrs[i].sh_type == SHT_SYMTAB) {
@@ -2378,39 +2970,80 @@ static int sukisu_kpm_setup_load_info(struct sukisu_kpm_load_info *info)
         pr_err("kpm: module has no usable symbol table\n");
         return -ENOEXEC;
     }
-    if (info->sechdrs[info->index.sym].sh_size % sizeof(Elf_Sym)) {
+    if (!info->sechdrs[info->index.sym].sh_size ||
+        info->sechdrs[info->index.sym].sh_size % sizeof(Elf_Sym) ||
+        info->sechdrs[info->index.sym].sh_entsize != sizeof(Elf_Sym)) {
         pr_err("kpm: malformed symbol table size\n");
         return -ENOEXEC;
     }
+    if (info->sechdrs[info->index.sym].sh_info >
+        info->sechdrs[info->index.sym].sh_size / sizeof(Elf_Sym))
+        return -ENOEXEC;
     if (info->sechdrs[info->index.str].sh_type != SHT_STRTAB || !info->sechdrs[info->index.str].sh_size) {
         pr_err("kpm: module has no usable string table\n");
         return -ENOEXEC;
     }
 
     info->strtab = (char *)info->hdr + info->sechdrs[info->index.str].sh_offset;
+    if (info->strtab[info->sechdrs[info->index.str].sh_size - 1]) {
+        pr_err("kpm: symbol string table is not NUL-terminated\n");
+        return -ENOEXEC;
+    }
+
+    for (i = 1; i < info->hdr->e_shnum; i++) {
+        Elf_Shdr *shdr = &info->sechdrs[i];
+
+        if (shdr->sh_type != SHT_RELA && shdr->sh_type != SHT_REL)
+            continue;
+        if (shdr->sh_info >= info->hdr->e_shnum || shdr->sh_link != info->index.sym)
+            return -ENOEXEC;
+        if (shdr->sh_type == SHT_RELA &&
+            (shdr->sh_entsize != sizeof(Elf_Rela) || shdr->sh_size % sizeof(Elf_Rela)))
+            return -ENOEXEC;
+        if (shdr->sh_type == SHT_REL &&
+            (shdr->sh_entsize != sizeof(Elf_Rel) || shdr->sh_size % sizeof(Elf_Rel)))
+            return -ENOEXEC;
+    }
+
     return 0;
 }
 
 static int sukisu_kpm_elf_header_check(struct sukisu_kpm_load_info *info)
 {
     const Elf_Ehdr *hdr = info->hdr;
+    const Elf_Shdr *shstr;
     unsigned long shdr_size;
 
-    if (info->len <= sizeof(*hdr))
+    if (info->len < sizeof(*hdr))
         return -ENOEXEC;
     if (memcmp(hdr->e_ident, ELFMAG, SELFMAG))
         return -ENOEXEC;
-    if (hdr->e_ident[EI_CLASS] != ELFCLASS64 || hdr->e_ident[EI_DATA] != ELFDATA2LSB)
+    if (hdr->e_ident[EI_CLASS] != ELFCLASS64 || hdr->e_ident[EI_DATA] != ELFDATA2LSB ||
+        hdr->e_ident[EI_VERSION] != EV_CURRENT || hdr->e_version != EV_CURRENT)
         return -ENOEXEC;
     if (hdr->e_type != ET_REL || hdr->e_machine != EM_X86_64)
         return -ENOEXEC;
-    if (hdr->e_shentsize != sizeof(Elf_Shdr) || !hdr->e_shnum)
+    if (hdr->e_ehsize != sizeof(*hdr) || hdr->e_phnum || hdr->e_shentsize != sizeof(Elf_Shdr) || !hdr->e_shnum ||
+        hdr->e_shnum > SUKISU_KPM_MAX_SECTIONS)
         return -ENOEXEC;
-    if (hdr->e_shstrndx == SHN_UNDEF || hdr->e_shstrndx >= hdr->e_shnum)
+    if (hdr->e_shstrndx == SHN_UNDEF || hdr->e_shstrndx == SHN_XINDEX || hdr->e_shstrndx >= hdr->e_shnum)
         return -ENOEXEC;
 
-    shdr_size = hdr->e_shnum * sizeof(Elf_Shdr);
-    if (hdr->e_shoff > info->len || shdr_size > info->len - hdr->e_shoff)
+    if (check_mul_overflow((unsigned long)hdr->e_shnum, sizeof(Elf_Shdr), &shdr_size))
+        return -ENOEXEC;
+    if (hdr->e_shoff < sizeof(*hdr) || hdr->e_shoff > info->len || shdr_size > info->len - hdr->e_shoff)
+        return -ENOEXEC;
+
+    info->sechdrs = (void *)hdr + hdr->e_shoff;
+    if (info->sechdrs[0].sh_type != SHT_NULL || info->sechdrs[0].sh_size || info->sechdrs[0].sh_addr)
+        return -ENOEXEC;
+
+    shstr = &info->sechdrs[hdr->e_shstrndx];
+    if (shstr->sh_type != SHT_STRTAB || !shstr->sh_size || shstr->sh_offset > info->len ||
+        shstr->sh_size > info->len - shstr->sh_offset)
+        return -ENOEXEC;
+    info->secstrings = (void *)hdr + shstr->sh_offset;
+    if (info->secstrings[shstr->sh_size - 1])
         return -ENOEXEC;
 
     return 0;
@@ -2501,8 +3134,9 @@ static int sukisu_kpm_simplify_symbols(struct sukisu_kpm_module *mod, struct suk
         const char *name;
         unsigned long secbase;
         unsigned long addr;
+        unsigned long value;
 
-        if (sym[i].st_name >= info->sechdrs[info->index.str].sh_size)
+        if (!sukisu_kpm_string_in_table(info->strtab, info->sechdrs[info->index.str].sh_size, sym[i].st_name))
             return -ENOEXEC;
         name = info->strtab + sym[i].st_name;
 
@@ -2523,10 +3157,17 @@ static int sukisu_kpm_simplify_symbols(struct sukisu_kpm_module *mod, struct suk
             sym[i].st_value = addr;
             break;
         default:
-            if (sym[i].st_shndx >= info->hdr->e_shnum)
+            if (sym[i].st_shndx >= SHN_LORESERVE || sym[i].st_shndx >= info->hdr->e_shnum)
+                return -ENOEXEC;
+            if (!(info->sechdrs[sym[i].st_shndx].sh_flags & SHF_ALLOC))
+                return -ENOEXEC;
+            if (sym[i].st_value > info->sechdrs[sym[i].st_shndx].sh_size ||
+                sym[i].st_size > info->sechdrs[sym[i].st_shndx].sh_size - sym[i].st_value)
                 return -ENOEXEC;
             secbase = info->sechdrs[sym[i].st_shndx].sh_addr;
-            sym[i].st_value += secbase;
+            if (check_add_overflow(secbase, (unsigned long)sym[i].st_value, &value))
+                return -EOVERFLOW;
+            sym[i].st_value = value;
             break;
         }
     }
@@ -2588,7 +3229,6 @@ static int sukisu_kpm_apply_relocate_add(struct sukisu_kpm_module *mod, struct s
         if (sym_index >= nsyms)
             return -ENOEXEC;
 
-        loc = (void *)target->sh_addr + rel[i].r_offset;
         symval = symtab[sym_index].st_value;
         val = symval + rel[i].r_addend;
 
@@ -2598,6 +3238,7 @@ static int sukisu_kpm_apply_relocate_add(struct sukisu_kpm_module *mod, struct s
         case R_X86_64_64:
             if (sukisu_kpm_check_reloc_range(target, &rel[i], sizeof(u64)))
                 return -ENOEXEC;
+            loc = (void *)target->sh_addr + rel[i].r_offset;
             *(u64 *)loc = val;
             break;
         case R_X86_64_32:
@@ -2605,6 +3246,7 @@ static int sukisu_kpm_apply_relocate_add(struct sukisu_kpm_module *mod, struct s
                 return -ENOEXEC;
             if (val != (u32)val)
                 return -ERANGE;
+            loc = (void *)target->sh_addr + rel[i].r_offset;
             *(u32 *)loc = val;
             break;
         case R_X86_64_32S:
@@ -2612,12 +3254,14 @@ static int sukisu_kpm_apply_relocate_add(struct sukisu_kpm_module *mod, struct s
                 return -ENOEXEC;
             if ((s64)val != (s32)val)
                 return -ERANGE;
+            loc = (void *)target->sh_addr + rel[i].r_offset;
             *(s32 *)loc = val;
             break;
         case R_X86_64_PC32:
         case R_X86_64_PLT32:
             if (sukisu_kpm_check_reloc_range(target, &rel[i], sizeof(s32)))
                 return -ENOEXEC;
+            loc = (void *)target->sh_addr + rel[i].r_offset;
             sval = (s64)val - (s64)(unsigned long)loc;
             if (sval != (s32)sval) {
                 pr_err("kpm: PC-relative relocation overflow for %s; use -mcmodel=kernel -fno-pic\n", mod->info.name);
@@ -2628,6 +3272,7 @@ static int sukisu_kpm_apply_relocate_add(struct sukisu_kpm_module *mod, struct s
         case R_X86_64_PC64:
             if (sukisu_kpm_check_reloc_range(target, &rel[i], sizeof(s64)))
                 return -ENOEXEC;
+            loc = (void *)target->sh_addr + rel[i].r_offset;
             *(s64 *)loc = (s64)val - (s64)(unsigned long)loc;
             break;
         case R_X86_64_GOTPCREL:
@@ -2637,6 +3282,7 @@ static int sukisu_kpm_apply_relocate_add(struct sukisu_kpm_module *mod, struct s
                 return -ENOEXEC;
             if (!info->got_entries || info->got_next >= info->got_entries)
                 return -ENOEXEC;
+            loc = (void *)target->sh_addr + rel[i].r_offset;
             got = mod->start + info->got_offset + info->got_next * sizeof(u64);
             info->got_next++;
             *(u64 *)got = symval;
@@ -2723,20 +3369,24 @@ static int sukisu_kpm_enable_text_exec(struct sukisu_kpm_module *mod)
     return 0;
 }
 
-static void sukisu_kpm_disable_text_exec(struct sukisu_kpm_module *mod)
+static int sukisu_kpm_disable_text_exec(struct sukisu_kpm_module *mod)
 {
-    if (mod->start && mod->size) {
-        int rc;
+    int rc;
 
-        rc = set_memory_rw((unsigned long)mod->start, mod->size >> PAGE_SHIFT);
-        if (rc)
-            pr_err("kpm: set_memory_rw failed while disabling %s rc=%d\n",
-                   mod->info.name ? mod->info.name : "<unknown>", rc);
-        rc = set_memory_nx((unsigned long)mod->start, mod->size >> PAGE_SHIFT);
-        if (rc)
-            pr_err("kpm: set_memory_nx failed while disabling %s rc=%d\n",
-                   mod->info.name ? mod->info.name : "<unknown>", rc);
+    if (!mod->start || !mod->size)
+        return -EINVAL;
+
+    rc = set_memory_nx((unsigned long)mod->start, mod->size >> PAGE_SHIFT);
+    if (rc) {
+        pr_err("kpm: set_memory_nx failed while disabling %s rc=%d\n",
+               mod->info.name ? mod->info.name : "<unknown>", rc);
+        return rc;
     }
+    rc = set_memory_rw((unsigned long)mod->start, mod->size >> PAGE_SHIFT);
+    if (rc)
+        pr_err("kpm: set_memory_rw failed while disabling %s rc=%d\n",
+               mod->info.name ? mod->info.name : "<unknown>", rc);
+    return rc;
 }
 
 static void sukisu_kpm_free_module(struct sukisu_kpm_module *mod)
@@ -2748,8 +3398,11 @@ static void sukisu_kpm_free_module(struct sukisu_kpm_module *mod)
     kfree(mod->ctl_args);
     kfree(mod->source_path);
     if (mod->start) {
-        sukisu_kpm_disable_text_exec(mod);
-        module_memfree(mod->start);
+        sukisu_kpm_sync_before_exec_free();
+        if (!sukisu_kpm_disable_text_exec(mod))
+            module_memfree(mod->start);
+        else
+            pr_err("kpm: leaking module allocation %px for safety after permission transition failure\n", mod->start);
     }
     kfree(mod);
 }
@@ -2766,41 +3419,11 @@ static struct sukisu_kpm_module *sukisu_kpm_find_module_locked(const char *name)
     return NULL;
 }
 
-static bool sukisu_kpm_chain_has_owner(struct sukisu_kpm_module **owners, s8 *states, int max_items,
-                                       const struct sukisu_kpm_module *mod)
-{
-    int i;
-
-    for (i = 0; i < max_items; i++) {
-        if (READ_ONCE(states[i]) == SUKISU_KPM_CHAIN_ITEM_READY && READ_ONCE(owners[i]) == mod)
-            return true;
-    }
-
-    return false;
-}
-
 static unsigned int sukisu_kpm_module_active_callbacks_locked(const struct sukisu_kpm_module *mod)
 {
-    struct sukisu_kpm_wrap_chain *wrap;
-    struct sukisu_kpm_fp_wrap_chain *fp_wrap;
-    struct sukisu_kpm_syscall_wrap_chain *syscall_wrap;
-    unsigned int active = 0;
+    int active = mod ? atomic_read(&mod->active_callbacks) : 0;
 
-    list_for_each_entry (wrap, &sukisu_kpm_wrap_chains, list) {
-        if (sukisu_kpm_chain_has_owner(wrap->owners, wrap->states, SUKISU_KPM_HOOK_CHAIN_NUM, mod))
-            active += atomic_read(&wrap->active);
-    }
-    list_for_each_entry (fp_wrap, &sukisu_kpm_fp_wrap_chains, list) {
-        if (sukisu_kpm_chain_has_owner(fp_wrap->owners, fp_wrap->states, SUKISU_KPM_FP_HOOK_CHAIN_NUM, mod))
-            active += atomic_read(&fp_wrap->active);
-    }
-    list_for_each_entry (syscall_wrap, &sukisu_kpm_syscall_wrap_chains, list) {
-        if (sukisu_kpm_chain_has_owner(syscall_wrap->owners, syscall_wrap->states, SUKISU_KPM_SYSCALL_HOOK_CHAIN_NUM,
-                                       mod))
-            active += atomic_read(&syscall_wrap->active);
-    }
-
-    return active;
+    return active > 0 ? active : 0;
 }
 
 static int sukisu_kpm_module_unload_gate_locked(const struct sukisu_kpm_module *mod, unsigned int *active_callbacks)
@@ -2808,7 +3431,7 @@ static int sukisu_kpm_module_unload_gate_locked(const struct sukisu_kpm_module *
     unsigned int refs = sukisu_kpm_module_hook_refs(mod);
 
     *active_callbacks = sukisu_kpm_module_active_callbacks_locked(mod);
-    if (refs || *active_callbacks)
+    if (refs || mod->quiescing_count || *active_callbacks)
         return -EBUSY;
     return 0;
 }
@@ -2816,12 +3439,14 @@ static int sukisu_kpm_module_unload_gate_locked(const struct sukisu_kpm_module *
 static bool sukisu_kpm_keep_failed_module_if_busy(struct sukisu_kpm_module *mod, const char *stage, int original_rc)
 {
     unsigned int active_callbacks = 0;
+    unsigned int quiescing;
     unsigned int refs;
     int gate_rc;
 
     mutex_lock(&sukisu_kpm_hook_lock);
     gate_rc = sukisu_kpm_module_unload_gate_locked(mod, &active_callbacks);
     refs = sukisu_kpm_module_hook_refs(mod);
+    quiescing = mod->quiescing_count;
     mutex_unlock(&sukisu_kpm_hook_lock);
 
     if (!gate_rc)
@@ -2833,14 +3458,14 @@ static bool sukisu_kpm_keep_failed_module_if_busy(struct sukisu_kpm_module *mod,
         mod->unloading = false;
         list_add_tail(&mod->list, &sukisu_kpm_modules);
         mutex_unlock(&sukisu_kpm_module_lock);
-        pr_err("kpm: keeping %s resident after %s rc=%d; refs=%u callbacks=%u\n", mod->info.name, stage, original_rc,
-               refs, active_callbacks);
+        pr_err("kpm: keeping %s resident after %s rc=%d; refs=%u quiescing=%u callbacks=%u\n", mod->info.name,
+               stage, original_rc, refs, quiescing, active_callbacks);
         return true;
     }
     mutex_unlock(&sukisu_kpm_module_lock);
 
-    pr_err("kpm: cannot free failed module %s after %s rc=%d; refs=%u callbacks=%u\n", mod->info.name, stage,
-           original_rc, refs, active_callbacks);
+    pr_err("kpm: cannot free failed module %s after %s rc=%d; refs=%u quiescing=%u callbacks=%u\n", mod->info.name,
+           stage, original_rc, refs, quiescing, active_callbacks);
     return true;
 }
 
@@ -2880,6 +3505,7 @@ static int sukisu_kpm_load_module(const void *data, unsigned long len, const cha
         return -ENOMEM;
 
     INIT_LIST_HEAD(&mod->list);
+    atomic_set(&mod->active_callbacks, 0);
     if (args && args[0]) {
         mod->args = kstrdup(args, GFP_KERNEL);
         if (!mod->args) {
@@ -2895,11 +3521,9 @@ static int sukisu_kpm_load_module(const void *data, unsigned long len, const cha
         }
     }
 
-    sukisu_kpm_layout_sections(mod, info);
-    if (!mod->size) {
-        rc = -ENOEXEC;
+    rc = sukisu_kpm_layout_sections(mod, info);
+    if (rc)
         goto free_mod;
-    }
 
     rc = sukisu_kpm_move_module(mod, info);
     if (rc)
@@ -2966,23 +3590,36 @@ int sukisu_kpm_loader_load_module_path(const char *path, const char *args, void 
     loff_t pos = 0;
     loff_t len;
     ssize_t read;
+    bool write_denied = false;
     int rc;
 
-    if (!path || !path[0])
+    atomic64_inc(&sukisu_kpm_load_attempts);
+    if (!path || !path[0]) {
+        atomic64_inc(&sukisu_kpm_load_failures);
         return -EINVAL;
+    }
 
     filp = filp_open(path, O_RDONLY, 0);
     if (IS_ERR(filp)) {
         pr_err("kpm: open module %s failed: %ld\n", path, PTR_ERR(filp));
+        atomic64_inc(&sukisu_kpm_load_failures);
         return PTR_ERR(filp);
     }
 
-    len = vfs_llseek(filp, 0, SEEK_END);
+    if (!S_ISREG(file_inode(filp)->i_mode)) {
+        rc = -EINVAL;
+        goto close_file;
+    }
+    rc = deny_write_access(filp);
+    if (rc)
+        goto close_file;
+    write_denied = true;
+
+    len = i_size_read(file_inode(filp));
     if (len <= 0 || len > SUKISU_KPM_MAX_MODULE_SIZE) {
         rc = -EFBIG;
         goto close_file;
     }
-    vfs_llseek(filp, 0, SEEK_SET);
 
     data = vmalloc(len);
     if (!data) {
@@ -2990,10 +3627,12 @@ int sukisu_kpm_loader_load_module_path(const char *path, const char *args, void 
         goto close_file;
     }
 
-    read = kernel_read(filp, data, len, &pos);
-    if (read != len) {
-        rc = read < 0 ? read : -EIO;
-        goto free_data;
+    while (pos < len) {
+        read = kernel_read(filp, data + pos, len - pos, &pos);
+        if (read <= 0) {
+            rc = read < 0 ? read : -EIO;
+            goto free_data;
+        }
     }
 
     rc = sukisu_kpm_load_module(data, len, args, "load-file", path, reserved);
@@ -3001,7 +3640,13 @@ int sukisu_kpm_loader_load_module_path(const char *path, const char *args, void 
 free_data:
     vfree(data);
 close_file:
+    if (write_denied)
+        allow_write_access(filp);
     filp_close(filp, NULL);
+    if (rc)
+        atomic64_inc(&sukisu_kpm_load_failures);
+    else
+        atomic64_inc(&sukisu_kpm_load_successes);
     return rc;
 }
 
@@ -3010,17 +3655,22 @@ int sukisu_kpm_loader_unload_module(const char *name, void __user *reserved)
     struct sukisu_kpm_module *mod;
     long rc;
 
-    if (!name || !name[0])
+    atomic64_inc(&sukisu_kpm_unload_attempts);
+    if (!name || !name[0]) {
+        atomic64_inc(&sukisu_kpm_unload_failures);
         return -EINVAL;
+    }
 
     mutex_lock(&sukisu_kpm_module_lock);
     mod = sukisu_kpm_find_module_locked(name);
     if (!mod) {
         mutex_unlock(&sukisu_kpm_module_lock);
+        atomic64_inc(&sukisu_kpm_unload_failures);
         return -ENOENT;
     }
     if (mod->unloading) {
         mutex_unlock(&sukisu_kpm_module_lock);
+        atomic64_inc(&sukisu_kpm_unload_failures);
         return -EBUSY;
     }
     mod->unloading = true;
@@ -3031,6 +3681,7 @@ int sukisu_kpm_loader_unload_module(const char *name, void __user *reserved)
         mutex_lock(&sukisu_kpm_module_lock);
         mod->unloading = false;
         mutex_unlock(&sukisu_kpm_module_lock);
+        atomic64_inc(&sukisu_kpm_unload_failures);
         return rc;
     }
     rc = (*mod->exit)(reserved);
@@ -3040,6 +3691,7 @@ int sukisu_kpm_loader_unload_module(const char *name, void __user *reserved)
         mod->unloading = false;
         mutex_unlock(&sukisu_kpm_module_lock);
         pr_err("kpm: unload of %s refused by exit rc=%ld; module kept loaded\n", name, rc);
+        atomic64_inc(&sukisu_kpm_unload_failures);
         return rc < 0 ? (int)rc : -EINVAL;
     }
 
@@ -3049,13 +3701,16 @@ int sukisu_kpm_loader_unload_module(const char *name, void __user *reserved)
         int gate_rc = sukisu_kpm_module_unload_gate_locked(mod, &active_callbacks);
 
         if (gate_rc) {
+            unsigned int quiescing = mod->quiescing_count;
             unsigned int refs = sukisu_kpm_module_hook_refs(mod);
 
             mutex_unlock(&sukisu_kpm_hook_lock);
             mutex_lock(&sukisu_kpm_module_lock);
             mod->unloading = false;
             mutex_unlock(&sukisu_kpm_module_lock);
-            pr_err("kpm: unload of %s refused; active refs=%u callbacks=%u\n", name, refs, active_callbacks);
+            pr_err("kpm: unload of %s refused; active refs=%u quiescing=%u callbacks=%u\n", name, refs,
+                   quiescing, active_callbacks);
+            atomic64_inc(&sukisu_kpm_unload_failures);
             return gate_rc;
         }
     }
@@ -3067,6 +3722,7 @@ int sukisu_kpm_loader_unload_module(const char *name, void __user *reserved)
 
     pr_info("kpm: unloaded %s rc=%ld\n", name, rc);
     sukisu_kpm_free_module(mod);
+    atomic64_inc(&sukisu_kpm_unload_successes);
     return 0;
 }
 
@@ -3127,6 +3783,7 @@ int sukisu_kpm_loader_info(const char *name, char *out, int size)
         return -ENOENT;
     }
 
+    mutex_lock(&sukisu_kpm_hook_lock);
     ret = scnprintf(out, size,
                     "name=%s\n"
                     "version=%s\n"
@@ -3138,11 +3795,14 @@ int sukisu_kpm_loader_info(const char *name, char *out, int size)
                     "source_path=%s\n"
                     "size=%u\n"
                     "text_size=%u\n"
+                    "ro_size=%u\n"
                     "inline_hooks=%u\n"
                     "fp_hooks=%u\n"
                     "wrap_items=%u\n"
                     "fp_wrap_items=%u\n"
-                    "syscall_wrap_items=%u\n",
+                    "syscall_wrap_items=%u\n"
+                    "quiescing=%u\n"
+                    "active_callbacks=%d\n",
                     mod->info.name ? mod->info.name : "", mod->info.version ? mod->info.version : "",
                     mod->info.license ? mod->info.license : "", mod->info.author ? mod->info.author : "",
                     mod->info.description ? mod->info.description : "",
@@ -3150,8 +3810,10 @@ int sukisu_kpm_loader_info(const char *name, char *out, int size)
                     mod->unloading   ? "unloading" :
                                        "loaded",
                     mod->args ? mod->args : "", mod->source_path ? mod->source_path : "", mod->size, mod->text_size,
+                    mod->ro_size,
                     mod->inline_hook_count, mod->fp_hook_count, mod->wrap_item_count, mod->fp_wrap_item_count,
-                    mod->syscall_wrap_item_count);
+                    mod->syscall_wrap_item_count, mod->quiescing_count, atomic_read(&mod->active_callbacks));
+    mutex_unlock(&sukisu_kpm_hook_lock);
     mutex_unlock(&sukisu_kpm_module_lock);
 
     return ret;
@@ -3272,10 +3934,19 @@ int sukisu_kpm_loader_audit(char *out, int size)
                                  "fp_hooks=%d\n"
                                  "wrap_chains=%d\n"
                                  "fp_wrap_chains=%d\n"
-                                 "syscall_wrap_chains=%d\n",
+                                 "syscall_wrap_chains=%d\n"
+                                 "load_attempts=%lld\n"
+                                 "load_successes=%lld\n"
+                                 "load_failures=%lld\n"
+                                 "unload_attempts=%lld\n"
+                                 "unload_successes=%lld\n"
+                                 "unload_failures=%lld\n",
                                  SUKISU_KPM_LOADER_VERSION, SUKISU_KPM_X86_64_ABI_VERSION,
                                  SUKISU_KPM_X86_64_FEATURE_BITS, modules, inline_hooks, fp_hooks, wrap_chains,
-                                 fp_wrap_chains, syscall_wrap_chains);
+                                 fp_wrap_chains, syscall_wrap_chains, atomic64_read(&sukisu_kpm_load_attempts),
+                                 atomic64_read(&sukisu_kpm_load_successes), atomic64_read(&sukisu_kpm_load_failures),
+                                 atomic64_read(&sukisu_kpm_unload_attempts), atomic64_read(&sukisu_kpm_unload_successes),
+                                 atomic64_read(&sukisu_kpm_unload_failures));
     if (rc)
         goto out_unlock;
 
@@ -3284,14 +3955,14 @@ int sukisu_kpm_loader_audit(char *out, int size)
 
         rc = sukisu_kpm_audit_append(
             out, size, &off,
-            "module name=%s version=%s state=%s source_path=%s size=%u text_size=%u inline_hooks=%u fp_hooks=%u wrap_items=%u fp_wrap_items=%u syscall_wrap_items=%u active_callbacks=%u\n",
+            "module name=%s version=%s state=%s source_path=%s size=%u text_size=%u ro_size=%u inline_hooks=%u fp_hooks=%u wrap_items=%u fp_wrap_items=%u syscall_wrap_items=%u quiescing=%u active_callbacks=%u\n",
             mod->info.name ? mod->info.name : "", mod->info.version ? mod->info.version : "",
             mod->load_failed ? "load_failed" :
             mod->unloading   ? "unloading" :
                                "loaded",
-            mod->source_path ? mod->source_path : "", mod->size, mod->text_size, mod->inline_hook_count,
+            mod->source_path ? mod->source_path : "", mod->size, mod->text_size, mod->ro_size, mod->inline_hook_count,
             mod->fp_hook_count, mod->wrap_item_count, mod->fp_wrap_item_count, mod->syscall_wrap_item_count,
-            active_callbacks);
+            mod->quiescing_count, active_callbacks);
         if (rc)
             goto out_unlock;
     }

@@ -146,208 +146,188 @@ static void sukisu_kpm_caps(struct ksu_kpm_caps *caps)
 
 static int sukisu_kpm_copy_to_user(unsigned long dst, const void *src, unsigned long len)
 {
+    if (!dst || !ksu_access_ok(dst, len))
+        return -EFAULT;
     if (copy_to_user((void __user *)dst, src, len) != 0)
         return -EFAULT;
     return 0;
 }
 
+static int sukisu_kpm_copy_user_string(char *dst, size_t dst_size, unsigned long src,
+                                       bool allow_null, bool allow_empty)
+{
+    long copied;
+
+    if (!dst || dst_size < 2)
+        return -EINVAL;
+
+    dst[0] = '\0';
+    if (!src)
+        return allow_null ? 0 : -EINVAL;
+    if (!ksu_access_ok(src, 1))
+        return -EFAULT;
+
+    copied = strncpy_from_user(dst, (const char __user *)src, dst_size);
+    if (copied < 0)
+        return copied;
+    if (copied >= dst_size) {
+        dst[dst_size - 1] = '\0';
+        return -ENAMETOOLONG;
+    }
+    if (!copied && !allow_empty)
+        return -EINVAL;
+
+    return copied;
+}
+
 noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, unsigned long arg2,
                                unsigned long result_code)
 {
-    int res = -1;
+    int res = -EINVAL;
+
+    if (!result_code || !ksu_access_ok(result_code, sizeof(res))) {
+        pr_err("kpm: invalid result_code pointer %px\n", (void *)result_code);
+        return -EFAULT;
+    }
+
     if (control_code == KSU_KPM_LOAD) {
         char kernel_load_path[256] = { 0 };
         char kernel_args_buffer[256] = { 0 };
-        long path_len;
+        int copied;
 
-        if (arg1 == 0) {
-            res = -EINVAL;
+        copied = sukisu_kpm_copy_user_string(kernel_load_path, sizeof(kernel_load_path),
+                                             arg1, false, false);
+        if (copied < 0) {
+            res = copied;
             goto exit;
         }
 
-        if (!ksu_access_ok(arg1, sizeof(kernel_load_path))) {
-            goto invalid_arg;
-        }
-
-        path_len = strncpy_from_user((char *)&kernel_load_path, (const char *)arg1, sizeof(kernel_load_path));
-        if (path_len <= 0) {
-            res = path_len < 0 ? path_len : -EINVAL;
+        copied = sukisu_kpm_copy_user_string(kernel_args_buffer, sizeof(kernel_args_buffer),
+                                             arg2, true, true);
+        if (copied < 0) {
+            res = copied;
             goto exit;
         }
-        kernel_load_path[sizeof(kernel_load_path) - 1] = '\0';
 
-        if (arg2 != 0) {
-            long args_len;
-
-            if (!ksu_access_ok(arg2, sizeof(kernel_args_buffer))) {
-                goto invalid_arg;
-            }
-
-            args_len = strncpy_from_user((char *)&kernel_args_buffer, (const char *)arg2, sizeof(kernel_args_buffer));
-            if (args_len < 0) {
-                res = args_len;
-                goto exit;
-            }
-            kernel_args_buffer[sizeof(kernel_args_buffer) - 1] = '\0';
-        }
-
-        sukisu_kpm_load_module_path((const char *)&kernel_load_path, (const char *)&kernel_args_buffer, NULL, &res);
+        sukisu_kpm_load_module_path(kernel_load_path, kernel_args_buffer, NULL, &res);
     } else if (control_code == KSU_KPM_UNLOAD) {
         char kernel_name_buffer[256] = { 0 };
-        long name_len;
+        int copied = sukisu_kpm_copy_user_string(kernel_name_buffer, sizeof(kernel_name_buffer),
+                                                 arg1, false, false);
 
-        if (arg1 == 0) {
-            res = -EINVAL;
+        if (copied < 0) {
+            res = copied;
             goto exit;
         }
 
-        if (!ksu_access_ok(arg1, sizeof(kernel_name_buffer))) {
-            goto invalid_arg;
-        }
-
-        name_len = strncpy_from_user((char *)&kernel_name_buffer, (const char *)arg1, sizeof(kernel_name_buffer));
-        if (name_len <= 0) {
-            res = name_len < 0 ? name_len : -EINVAL;
-            goto exit;
-        }
-        kernel_name_buffer[sizeof(kernel_name_buffer) - 1] = '\0';
-
-        sukisu_kpm_unload_module((const char *)&kernel_name_buffer, NULL, &res);
+        sukisu_kpm_unload_module(kernel_name_buffer, NULL, &res);
     } else if (control_code == KSU_KPM_NUM) {
         sukisu_kpm_num(&res);
     } else if (control_code == KSU_KPM_INFO) {
         char kernel_name_buffer[256] = { 0 };
         char buf[KPM_INFO_LEN] = { 0 };
         int size = 0;
-        long name_len;
+        int copied;
 
-        if (arg1 == 0 || arg2 == 0) {
-            res = -EINVAL;
+        if (!arg2)
+            goto exit;
+
+        copied = sukisu_kpm_copy_user_string(kernel_name_buffer, sizeof(kernel_name_buffer),
+                                             arg1, false, false);
+        if (copied < 0) {
+            res = copied;
             goto exit;
         }
 
-        if (!ksu_access_ok(arg1, sizeof(kernel_name_buffer))) {
-            goto invalid_arg;
-        }
-
-        name_len =
-            strncpy_from_user((char *)&kernel_name_buffer, (const char __user *)arg1, sizeof(kernel_name_buffer));
-        if (name_len <= 0) {
-            res = name_len < 0 ? name_len : -EINVAL;
-            goto exit;
-        }
-        kernel_name_buffer[sizeof(kernel_name_buffer) - 1] = '\0';
-
-        sukisu_kpm_info((const char *)&kernel_name_buffer, (char *)&buf, sizeof(buf), &size);
+        sukisu_kpm_info(kernel_name_buffer, buf, sizeof(buf), &size);
 
         if (size < 0) {
             res = size;
             goto exit;
         }
 
-        if (!ksu_access_ok(arg2, size)) {
-            goto invalid_arg;
-        }
-
-        res = sukisu_kpm_copy_to_user(arg2, &buf, size);
+        res = sukisu_kpm_copy_to_user(arg2, buf, size);
 
     } else if (control_code == KSU_KPM_LIST) {
         char buf[1024] = { 0 };
-        int len = (int)arg2;
+        unsigned long len = arg2;
 
-        if (len <= 0) {
+        if (!arg1 || !len) {
             res = -EINVAL;
             goto exit;
         }
 
-        if (!ksu_access_ok(arg1, len)) {
-            goto invalid_arg;
-        }
-
-        sukisu_kpm_list((char *)&buf, sizeof(buf), &res);
+        sukisu_kpm_list(buf, sizeof(buf), &res);
 
         if (res < 0) {
             goto exit;
         }
 
-        if (res >= len) {
+        if ((unsigned long)res >= len) {
             res = -ENOBUFS;
             goto exit;
         }
 
-        if (copy_to_user((void __user *)arg1, &buf, res + 1) != 0) {
-            pr_info("kpm: Copy to user failed.");
-            res = -EFAULT;
-        }
+        res = sukisu_kpm_copy_to_user(arg1, buf, res + 1);
 
     } else if (control_code == KSU_KPM_CONTROL) {
         char kpm_name[KPM_NAME_LEN] = { 0 };
         char kpm_args[KPM_ARGS_LEN] = { 0 };
+        int name_len;
+        int arg_len;
 
-        if (!ksu_access_ok(arg1, sizeof(kpm_name))) {
-            goto invalid_arg;
-        }
-
-        if (!ksu_access_ok(arg2, sizeof(kpm_args))) {
-            goto invalid_arg;
-        }
-
-        long name_len = strncpy_from_user((char *)&kpm_name, (const char __user *)arg1, sizeof(kpm_name));
-        if (name_len <= 0) {
-            res = -EINVAL;
+        name_len = sukisu_kpm_copy_user_string(kpm_name, sizeof(kpm_name), arg1,
+                                               false, false);
+        if (name_len < 0) {
+            res = name_len;
             goto exit;
         }
 
-        long arg_len = strncpy_from_user((char *)&kpm_args, (const char __user *)arg2, sizeof(kpm_args));
+        arg_len = sukisu_kpm_copy_user_string(kpm_args, sizeof(kpm_args), arg2,
+                                              true, true);
+        if (arg_len < 0) {
+            res = arg_len;
+            goto exit;
+        }
 
-        sukisu_kpm_control((const char *)&kpm_name, (const char *)&kpm_args, arg_len, &res);
+        sukisu_kpm_control(kpm_name, kpm_args, arg_len, &res);
 
     } else if (control_code == KSU_KPM_VERSION) {
         char buffer[256] = { 0 };
+        unsigned long outlen = min_t(unsigned long, arg2, sizeof(buffer));
+        size_t len;
 
-        sukisu_kpm_version((char *)&buffer, sizeof(buffer));
-
-        unsigned int outlen = (unsigned int)arg2;
-        int len = strlen(buffer);
-
-        if (arg1 == 0 || outlen == 0) {
+        if (!arg1 || !outlen) {
             res = -EINVAL;
             goto exit;
         }
 
-        if (!ksu_access_ok(arg1, outlen)) {
-            goto invalid_arg;
-        }
+        sukisu_kpm_version(buffer, sizeof(buffer));
+        len = strnlen(buffer, sizeof(buffer) - 1);
 
         if (len >= outlen)
             len = outlen - 1;
 
-        res = sukisu_kpm_copy_to_user(arg1, &buffer, len + 1);
+        buffer[len] = '\0';
+        res = sukisu_kpm_copy_to_user(arg1, buffer, len + 1);
     } else if (control_code == KSU_KPM_CAPS) {
         struct ksu_kpm_caps caps;
-        unsigned int outlen = (unsigned int)arg2;
 
-        if (arg1 == 0 || outlen < sizeof(caps)) {
+        if (!arg1 || arg2 < sizeof(caps)) {
             res = -EINVAL;
             goto exit;
-        }
-
-        if (!ksu_access_ok(arg1, sizeof(caps))) {
-            goto invalid_arg;
         }
 
         sukisu_kpm_caps(&caps);
         res = sukisu_kpm_copy_to_user(arg1, &caps, sizeof(caps));
     } else if (control_code == KSU_KPM_AUDIT) {
         char *buf;
-        unsigned int outlen = (unsigned int)arg2;
+        unsigned long outlen = min_t(unsigned long, arg2, KPM_AUDIT_LEN);
 
-        if (arg1 == 0 || outlen == 0) {
+        if (!arg1 || !outlen) {
             res = -EINVAL;
             goto exit;
         }
-        if (outlen > KPM_AUDIT_LEN)
-            outlen = KPM_AUDIT_LEN;
         if (!ksu_access_ok(arg1, outlen)) {
             goto invalid_arg;
         }
@@ -362,9 +342,8 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
         if (res >= 0) {
             if (res >= outlen) {
                 res = -ENOBUFS;
-            } else if (copy_to_user(arg1, buf, res + 1) != 0) {
-                res = -EFAULT;
-            }
+            } else
+                res = sukisu_kpm_copy_to_user(arg1, buf, res + 1);
         }
         kfree(buf);
     }

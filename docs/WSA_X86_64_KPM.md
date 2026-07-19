@@ -24,6 +24,9 @@ Implemented:
 12. Buildable x86_64 KPM SDK examples and ELF fuzz smoke CI.
 13. `ksud kpm audit` reporting with module source paths, SHA256 hashes where userspace can read the module file, hook counters and unload gate state.
 14. Native x86_64 syscall wrapping through `hook_syscalln`, `fp_wrap_syscalln` and `inline_wrap_syscalln` by replacing `sys_call_table` slots with generated wrapper stubs.
+15. Strict, overflow-safe ELF validation with bounded file, image and metadata sizes, fully terminated string tables, symbol bounds, relocation ownership, W+X rejection and immutable `.kpm.*` entrypoint slots.
+16. Quiescent hook teardown that never waits for callbacks under the global hook mutex, tracks active callbacks per module and defers self-retirement through a workqueue when required.
+17. Compare-before-write restore for inline, function-pointer and syscall hooks, plus cumulative load and unload counters in `ksud kpm audit`.
 
 Not implemented in this release:
 
@@ -50,7 +53,7 @@ Not implemented in this release:
 
 The formal ABI contract is defined in [KPM_X86_64_ABI.md](KPM_X86_64_ABI.md). This section is a short operational summary.
 
-Current loader marker: `ReSukiSU-x86_64-KPM-loader/0.21`.
+Current loader marker: `ReSukiSU-x86_64-KPM-loader/0.22`.
 
 KPM modules are x86_64 `ET_REL` ELF objects with these sections:
 
@@ -86,6 +89,7 @@ Restore:
 2. `text_poke_bp()` writes the original prologue bytes back. The breakpoint emulation step uses the previous jump bytes so any in flight CPU continues into the trampoline rather than into a half restored prologue.
 3. `synchronize_rcu_tasks_rude()` and `synchronize_rcu_tasks()` are called before the trampoline pages are freed, so no task can still be running inside them.
 4. Before `module_memfree()`, generated executable buffers are switched back to `RW+NX`. If that transition fails, the loader logs the failure and keeps the allocation resident instead of freeing pages with stale executable permissions.
+5. Permission transitions enter `NX` before enabling writes, so teardown does not create a transient writable and executable mapping.
 
 Far jump fallback: when the trampoline cannot be reached with a 5 byte `JMP rel32`, the install path falls back to a 14 byte absolute jump emitted by the existing ReSukiSU x86_64 text writer.
 
@@ -109,6 +113,11 @@ Compat syscall helpers remain intentionally unsupported on this WSA build and re
 4. Hooks installed from a KPM `init`, `control` or `exit` context are tagged to that module. Unload is refused after `.kpm.exit` if owned inline hooks, function pointer hooks, wrapper chain items or active callbacks remain.
 5. Module ownership context is tracked per task and as a stack, so overlapping callbacks from different tasks cannot overwrite each other's current owner.
 6. Generated executable memory free is fail-closed: a failed `RW+NX` transition is treated as a hard cleanup error and the buffer is intentionally retained for diagnosis.
+7. Hook removal first marks a callback slot as retiring, releases the hook mutex, waits for classic RCU and RCU Tasks grace periods, then clears and reuses the slot. Callback acquisition pins the owning module inside a short RCU read section, and active callbacks have an independent per-module counter, including self-removing callbacks.
+8. The last wrapper can be removed from its own callback without deadlock. The external patch is detached immediately and workqueue retirement frees the stub only after the callback returns.
+9. Restore paths compare the live patch or pointer against the runtime's expected replacement. A later third-party hook is never silently overwritten.
+10. Module files must be regular files. The loader denies concurrent writers and completes short reads in a loop before parsing.
+11. Direct `hook` and `fp_hook` replacements must not voluntarily sleep while their hook can be removed. Sleepable callbacks should use the tracked `hook_wrap` or `fp_hook_wrap` path and must still obey the hooked target's execution context.
 
 ## KPM Build Flags
 

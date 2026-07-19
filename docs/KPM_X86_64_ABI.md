@@ -7,7 +7,7 @@ The single source of truth for the loader identity is [`kernel/kpm/kpm_loader_x8
 | Field | Value |
 | --- | --- |
 | Loader name | `ReSukiSU-x86_64-KPM-loader` |
-| Loader version | `ReSukiSU-x86_64-KPM-loader/0.21` |
+| Loader version | `ReSukiSU-x86_64-KPM-loader/0.22` |
 | ABI version | `1` |
 
 ## Module Format
@@ -37,9 +37,13 @@ version=<module-version>
 
 Recognized optional keys are `license`, `author` and `description`. Unknown keys are ignored by the loader.
 
+The strict loader accepts at most 4096 sections, a 16 MiB input file and a 32 MiB loaded image. Section and symbol string tables must end in NUL, every referenced string must terminate inside its table, section alignment must be a power of two no larger than `PAGE_SIZE`, and allocatable sections cannot be both writable and executable. Executable `SHT_NOBITS`, compressed or TLS allocatable sections, duplicate `.kpm.*` entrypoint sections and malformed symbol or relocation links are rejected before executable memory is allocated. Module names are limited to 31 portable characters from `[A-Za-z0-9_.-]`.
+
 ## Entrypoints
 
 Entrypoint sections contain function pointer slots. After relocation, each non-empty slot must point into the loaded module text range.
+
+`.kpm.info`, `.kpm.init`, `.kpm.exit`, `.kpm.ctl0` and `.kpm.ctl1` are reclassified as read-only before layout. Relocations are applied while the image is `RW+NX`; the entrypoint slots become immutable when final permissions are installed.
 
 ```c
 typedef long (*kpm_init_t)(const char *args, const char *event, void __user *reserved);
@@ -116,6 +120,10 @@ Feature bit assignments:
 | 10 | `SUKISU_KPM_X86_64_FEATURE_AUDIT` | Kernel/userspace audit reporting |
 | 11 | `SUKISU_KPM_X86_64_FEATURE_UNLOAD_GATE` | Unload is refused while owned hooks or callbacks remain active |
 | 12 | `SUKISU_KPM_X86_64_FEATURE_SYSCALL_WRAP` | Native x86_64 syscall-table wrappers |
+| 13 | `SUKISU_KPM_X86_64_FEATURE_STRICT_ELF` | Overflow-safe ELF, string, symbol, relocation and layout validation |
+| 14 | `SUKISU_KPM_X86_64_FEATURE_QUIESCENT_TEARDOWN` | Lock-free grace-period waits, per-module active callback tracking and deferred self-retirement |
+| 15 | `SUKISU_KPM_X86_64_FEATURE_IMMUTABLE_ENTRYPOINTS` | Entrypoint and metadata sections become read-only after relocation |
+| 16 | `SUKISU_KPM_X86_64_FEATURE_RUNTIME_STATS` | Audit load/unload attempt, success and failure counters |
 
 ## Userspace Capability Handshake
 
@@ -146,6 +154,13 @@ Rejected or guarded targets include:
 4. Prologues containing unsupported control flow such as relative calls, direct jumps, conditional jumps, `ret` or `int3`.
 5. RIP-relative displacement rewrites that overflow.
 6. Patch attempts from IRQ or atomic context.
+7. Patches crossing a page boundary in the physical mapping backend.
+
+Unhook restores are compare-before-write operations. Inline absolute jumps, function pointer hooks and syscall-table wrappers are restored only if the live bytes or pointer still match the replacement installed by this runtime. A conflicting later patch returns `-EBUSY` and is not overwritten.
+
+Wrapper callback acquisition is protected by classic RCU and pins the owning module before leaving the read-side critical section. Removal publishes `RETIRING`, waits for both classic RCU and Tasks RCU grace periods, and keeps the owner quiescing until the slot is cleared. A selected callback can therefore finish even if removal races with CPU preemption.
+
+All callbacks must obey the execution-context rules of the hooked target. Direct `hook` and `fp_hook` replacements must not voluntarily sleep while their hook can be removed, because the generic direct-hook ABI has no wrapper in which the runtime can count entry and exit. Use `hook_wrap` or `fp_hook_wrap` when a callback needs tracked, sleepable lifetime semantics.
 
 Inline hook install return codes:
 
@@ -183,7 +198,7 @@ Compat syscall wrappers are not implemented on WSA x86_64 and return `-EOPNOTSUP
 `ksud kpm version` returns the compatibility string expected by Manager:
 
 ```text
-ReSukiSU-x86_64-KPM-loader/0.21
+ReSukiSU-x86_64-KPM-loader/0.22
 ```
 
 Structured diagnostics are available through:
@@ -199,7 +214,7 @@ ksud kpm audit --json
 
 `doctor` reports loader reachability, loaded module count, safe mode state, autoload disable state and `/data/adb/kpm` hardening status. Autoload-specific status and controls are available through `ksud kpm autoload-status`, `autoload-disable`, `autoload-enable` and `autoload-now`.
 
-`audit` reports loader feature metadata, loaded modules, source paths, SHA256 hashes for readable module files, active hook/callback counters and active hook records. The loader tags hooks installed from a module's `init`, `control` or `exit` context and refuses unload if `.kpm.exit` returns success but owned hooks or callback chain items are still present.
+`audit` reports loader feature metadata, cumulative load/unload results, loaded modules, source paths, SHA256 hashes for readable module files, quiescing and active callback counters, and active hook records. The loader tags hooks installed from a module's `init`, `control` or `exit` context and refuses unload if `.kpm.exit` returns success but owned hooks, retiring work or callbacks are still present.
 
 ## SDK And Examples
 
@@ -233,7 +248,7 @@ Run:
 scripts/fuzz-kpm-x86-smoke.sh
 ```
 
-When libFuzzer and sanitizer runtimes are installed, the script uses `-fsanitize=fuzzer,address,undefined`. If the local clang package lacks those runtimes, it falls back to a standalone corpus smoke run so CI and developer machines still exercise malformed ELF input parsing. The smoke corpus includes static malformed seeds, the built x86_64 example KPM objects and deterministic mutations of ELF header and section table fields.
+When libFuzzer and sanitizer runtimes are installed, the script uses `-fsanitize=fuzzer,address,undefined`. If the local clang package lacks those runtimes, it falls back to a standalone corpus smoke run. Before random fuzzing, a standalone validator requires every built example to pass and every deterministic malformed seed to fail. Mutations cover truncated tables, architecture and header errors, invalid alignment, W+X, executable or oversized `NOBITS`, unterminated string tables and bad relocation links. Example builds use an isolated temporary output directory so concurrent CI jobs do not delete each other's files.
 
 ## Preflight
 
