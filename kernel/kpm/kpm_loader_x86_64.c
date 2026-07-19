@@ -98,6 +98,15 @@
 #ifndef R_X86_64_REX_GOTPCRELX
 #define R_X86_64_REX_GOTPCRELX 42
 #endif
+#ifndef SHF_TLS
+#define SHF_TLS 0x400
+#endif
+#ifndef SHF_COMPRESSED
+#define SHF_COMPRESSED 0x800
+#endif
+#ifndef SHN_XINDEX
+#define SHN_XINDEX 0xffff
+#endif
 
 #ifdef CONFIG_KPROBES
 extern int __copy_instruction(u8 *dest, u8 *src, u8 *real, struct insn *insn);
@@ -680,16 +689,16 @@ static int sukisu_kpm_patch_bytes(void *addr, const void *bytes, size_t len)
 
 static int sukisu_kpm_patch_bytes_if_matches(void *addr, const void *expected, const void *replacement, size_t len)
 {
-    u8 current[SUKISU_KPM_X86_MAX_STOLEN_SIZE];
+    u8 live[SUKISU_KPM_X86_MAX_STOLEN_SIZE];
     int rc;
 
-    if (!expected || !replacement || !len || len > sizeof(current))
+    if (!expected || !replacement || !len || len > sizeof(live))
         return -EINVAL;
 
-    rc = copy_from_kernel_nofault(current, addr, len);
+    rc = copy_from_kernel_nofault(live, addr, len);
     if (rc)
         return rc;
-    if (memcmp(current, expected, len))
+    if (memcmp(live, expected, len))
         return -EBUSY;
 
     return sukisu_kpm_patch_bytes(addr, replacement, len);
@@ -843,7 +852,7 @@ static bool sukisu_kpm_text_range_reserved(void *start, unsigned int len)
     if (!len)
         return true;
 
-    if (check_add_overflow(first, len - 1, &last))
+    if (check_add_overflow(first, (unsigned long)len - 1, &last))
         return true;
 
     end = (void *)last;
@@ -2653,7 +2662,7 @@ static bool sukisu_kpm_file_ranges_overlap(u64 first_offset, u64 first_size, u64
            second_offset < first_offset + first_size;
 }
 
-static int sukisu_kpm_add_layout_size(unsigned int *size, const Elf_Shdr *sechdr, unsigned long *offset)
+static int sukisu_kpm_add_layout_size(unsigned int *size, const Elf_Shdr *sechdr, Elf64_Xword *offset)
 {
     u64 align = sechdr->sh_addralign ? sechdr->sh_addralign : 1;
     u64 aligned;
@@ -2993,15 +3002,14 @@ static int sukisu_kpm_setup_load_info(struct sukisu_kpm_load_info *info)
     for (i = 1; i < info->hdr->e_shnum; i++) {
         Elf_Shdr *shdr = &info->sechdrs[i];
 
-        if (shdr->sh_type != SHT_RELA && shdr->sh_type != SHT_REL)
+        if (shdr->sh_type == SHT_REL)
+            return -ENOEXEC;
+        if (shdr->sh_type != SHT_RELA)
             continue;
         if (shdr->sh_info >= info->hdr->e_shnum || shdr->sh_link != info->index.sym)
             return -ENOEXEC;
         if (shdr->sh_type == SHT_RELA &&
             (shdr->sh_entsize != sizeof(Elf_Rela) || shdr->sh_size % sizeof(Elf_Rela)))
-            return -ENOEXEC;
-        if (shdr->sh_type == SHT_REL &&
-            (shdr->sh_entsize != sizeof(Elf_Rel) || shdr->sh_size % sizeof(Elf_Rel)))
             return -ENOEXEC;
     }
 
