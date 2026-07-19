@@ -153,8 +153,7 @@ static int sukisu_kpm_copy_to_user(unsigned long dst, const void *src, unsigned 
     return 0;
 }
 
-static int sukisu_kpm_copy_user_string(char *dst, size_t dst_size, unsigned long src,
-                                       bool allow_null, bool allow_empty)
+static int sukisu_kpm_copy_user_string(char *dst, size_t dst_size, unsigned long src, bool allow_null, bool allow_empty)
 {
     long copied;
 
@@ -195,15 +194,13 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
         char kernel_args_buffer[256] = { 0 };
         int copied;
 
-        copied = sukisu_kpm_copy_user_string(kernel_load_path, sizeof(kernel_load_path),
-                                             arg1, false, false);
+        copied = sukisu_kpm_copy_user_string(kernel_load_path, sizeof(kernel_load_path), arg1, false, false);
         if (copied < 0) {
             res = copied;
             goto exit;
         }
 
-        copied = sukisu_kpm_copy_user_string(kernel_args_buffer, sizeof(kernel_args_buffer),
-                                             arg2, true, true);
+        copied = sukisu_kpm_copy_user_string(kernel_args_buffer, sizeof(kernel_args_buffer), arg2, true, true);
         if (copied < 0) {
             res = copied;
             goto exit;
@@ -212,8 +209,7 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
         sukisu_kpm_load_module_path(kernel_load_path, kernel_args_buffer, NULL, &res);
     } else if (control_code == KSU_KPM_UNLOAD) {
         char kernel_name_buffer[256] = { 0 };
-        int copied = sukisu_kpm_copy_user_string(kernel_name_buffer, sizeof(kernel_name_buffer),
-                                                 arg1, false, false);
+        int copied = sukisu_kpm_copy_user_string(kernel_name_buffer, sizeof(kernel_name_buffer), arg1, false, false);
 
         if (copied < 0) {
             res = copied;
@@ -232,8 +228,7 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
         if (!arg2)
             goto exit;
 
-        copied = sukisu_kpm_copy_user_string(kernel_name_buffer, sizeof(kernel_name_buffer),
-                                             arg1, false, false);
+        copied = sukisu_kpm_copy_user_string(kernel_name_buffer, sizeof(kernel_name_buffer), arg1, false, false);
         if (copied < 0) {
             res = copied;
             goto exit;
@@ -276,15 +271,13 @@ noinline int sukisu_handle_kpm(unsigned long control_code, unsigned long arg1, u
         int name_len;
         int arg_len;
 
-        name_len = sukisu_kpm_copy_user_string(kpm_name, sizeof(kpm_name), arg1,
-                                               false, false);
+        name_len = sukisu_kpm_copy_user_string(kpm_name, sizeof(kpm_name), arg1, false, false);
         if (name_len < 0) {
             res = name_len;
             goto exit;
         }
 
-        arg_len = sukisu_kpm_copy_user_string(kpm_args, sizeof(kpm_args), arg2,
-                                              true, true);
+        arg_len = sukisu_kpm_copy_user_string(kpm_args, sizeof(kpm_args), arg2, true, true);
         if (arg_len < 0) {
             res = arg_len;
             goto exit;
